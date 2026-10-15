@@ -1,4 +1,4 @@
-# `ai-dev-playbook` (Trellis) - AI-Assisted Development Standard
+# `ai-dev-playbook` (Trellis) — Agentic & AI-Driven Engineering Standard
 
 **Version:** `v0.1` (`[DRAFT]` - Working Kickoff Starter Kit)  
 **Primary Tools Supported:** **Claude Code** & **Antigravity IDE**  
