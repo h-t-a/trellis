@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-This repository defines the team standard for AI-assisted software development in enterprise banking and government-style systems (`v0.1` `[DRAFT]`).
+This repository defines the team standard for **Software Engineers** building enterprise banking and government-style systems using **AI agents, foundation models, RAG, subagents, and MCP integrations** (`v0.1` `[DRAFT]`).
 It supports both **Claude Code** and **Antigravity IDE** from a **single source of truth** in `docs/standards/` (see [ADR 0001](./docs/decisions/0001-single-source-of-truth.md)).
 
 - **Core workflow:** `Plan -> Implement -> Verify -> Review`
