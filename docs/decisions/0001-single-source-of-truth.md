@@ -8,7 +8,7 @@
 
 ## Context
 
-Developers across our teams use two AI-assisted development environments in daily work:
+**Software Engineers** across our teams build and architect systems using **AI agents, foundation models, RAG pipelines, subagents, and MCP tools** across two primary agentic engineering environments:
 1. **Antigravity IDE** (which uses workspace rules such as `GEMINI.md` / `.agents/rules/`, skills in `.agents/skills/`, workflows in `.agents/workflows/`, and artifacts).
 2. **Claude Code** (which uses `CLAUDE.md`, modular rules in `.claude/rules/*.md`, slash commands in `.claude/commands/*.md`, skills in `.claude/skills/`, subagents in `.claude/agents/*.md`, and hooks in `.claude/hooks/`).
 
