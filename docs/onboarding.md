@@ -1,20 +1,20 @@
-# Developer Onboarding Guide: `ai-dev-playbook` (Trellis)
+# Engineering Onboarding Guide: `ai-dev-playbook` (Trellis)
 
 **Status:** Working draft v0.1 `[DRAFT]`  
 **Source:** [trellis-project-export.md](./knowledge/trellis-project-export.md) (Sections 1, 2, 3, 7, 10, 11)
 
-Welcome to the **AI-Assisted Development Standard** starter kit. This guide explains how to start using the playbook in **Claude Code** and **Antigravity IDE**, how to grow your engineering judgment while using AI, and how to contribute improvements back to the standard.
+Welcome to the **AI-Assisted Development Standard** starter kit for **Software Engineers**. This guide explains how to adopt the playbook when developing with **AI agents, foundation models, RAG pipelines, subagents, and MCP tools** in **Claude Code** and **Antigravity IDE**, how to sharpen your engineering and architectural judgment, and how to contribute improvements back to the standard.
 
 ---
 
 ## 1. Core Workflow (`Plan -> Implement -> Verify -> Review`)
 
-Regardless of which AI tool you use, every non-trivial change follows the same four-step loop:
+Regardless of which agentic platform, model, or workflow you use, every non-trivial change follows the same four-step loop:
 
-1. **Plan:** Generate an Implementation Plan ([templates/implementation-plan.md](../templates/implementation-plan.md) or Antigravity Implementation Plan artifact). Review it critically and approve it **before** asking the AI to write feature code.
+1. **Plan:** Generate an Implementation Plan ([templates/implementation-plan.md](../templates/implementation-plan.md) or Antigravity Implementation Plan artifact). Review the architecture and design critically and approve it **before** instructing AI agents to write feature code.
 2. **Implement:** Write the failing test or acceptance criteria first, then implement within the [AI Boundary Standard](./standards/ai-boundary.md) tiers.
 3. **Verify:** Run tests, linters, secret scans, and static analysis against the [Testing Standard](./standards/testing-standard.md) and [Security Baseline](./standards/security-baseline.md).
-4. **Review:** Produce a Walkthrough ([templates/walkthrough.md](../templates/walkthrough.md)) or PR description ([templates/pull_request_template.md](../templates/pull_request_template.md)) disclosing what changed and where AI was used, then complete a human code review against the [Definition of Done](./standards/definition-of-done.md).
+4. **Review:** Produce a Walkthrough ([templates/walkthrough.md](../templates/walkthrough.md)) or PR description ([templates/pull_request_template.md](../templates/pull_request_template.md)) disclosing what changed and where AI agents/models were used, then complete a human code review against the [Definition of Done](./standards/definition-of-done.md).
 
 ---
 

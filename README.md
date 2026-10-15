@@ -8,10 +8,10 @@
 
 ## 1. Purpose
 
-`ai-dev-playbook` (**Trellis**) is a version-controlled starter kit and template repository for AI-assisted software engineering:
+`ai-dev-playbook` (**Trellis**) is a version-controlled starter kit and template repository for agentic & AI-driven software engineering:
 
-1. **Consistency:** Every project and developer follows the same quality bar when working with AI assistants.
-2. **Skill Growth:** AI use makes developers stronger (critical review of plans, failing tests first, turning mistakes into explicit rules), not weaker.
+1. **Consistency:** Every project—and every **Software Engineer**—follows the same quality bar when building with **AI agents, foundation models, RAG pipelines, subagents, and MCP tools**.
+2. **Skill Growth:** Working with AI agents and models makes engineers and architects stronger (critical review of architectural/implementation plans, failing tests first, turning mistakes into explicit rules), not weaker.
 3. **Cross-Team Collaboration:** Teams share one canonical set of standards (`docs/standards/`) with thin tool-specific pointers for both Claude Code and Antigravity IDE.
 4. **Structured Planning:** Every significant change follows the same lifecycle: **`Plan -> Implement -> Verify -> Review`**.
 
@@ -19,8 +19,9 @@
 
 ## 2. Who This Is For
 
+- **Developers** developing systems using **AI agents, foundation models, multi-agent workflows, and MCP integrations**.
 - Engineering teams building **enterprise banking, financial, and government-style systems** where security, auditability, and testing discipline are first-class requirements.
-- Developers using **Claude Code** (`CLAUDE.md`, `.claude/`) and/or **Antigravity IDE** (`GEMINI.md`, `.agents/`).
+- Teams operating across **Claude Code** (`CLAUDE.md`, `.claude/`) and **Antigravity IDE** (`GEMINI.md`, `.agents/`).
 - Tech leads, QA engineers, and security reviewers defining repeatable review gates and SLA criteria.
 
 ---
