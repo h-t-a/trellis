@@ -1,4 +1,4 @@
-# ADR 0001: Single Source of Truth for AI-Assisted Development Standards
+# ADR 0001: Single Source of Truth for Agentic & AI-Driven Engineering Standards
 
 - **Status:** Accepted (v0.1) `[DRAFT]`
 - **Date:** 2026-10-15
