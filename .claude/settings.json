@@ -1,0 +1,12 @@
+{
+  "_comment": "[VERIFY format] Claude Code project settings baseline. Configure project-specific allow/deny permissions before first use on a real repository. Per Working Agreement 6, lifecycle hooks (.claude/hooks/*.sh) are NOT wired into this file until explicitly reviewed and approved; see each script in .claude/hooks/ for the intended [VERIFY] wiring block.",
+  "permissions": {
+    "allow": [],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force*)"
+    ]
+  }
+}
