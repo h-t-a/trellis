@@ -1,4 +1,4 @@
-# Local AI assistant memory & settings (never commit personal/local overrides)
+# Local AI agent memory & settings (never commit personal/local overrides)
 CLAUDE.local.md
 **/CLAUDE.local.md
 settings.local.json
