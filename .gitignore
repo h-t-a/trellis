@@ -1,0 +1,16 @@
+# Local AI assistant memory & settings (never commit personal/local overrides)
+CLAUDE.local.md
+**/CLAUDE.local.md
+settings.local.json
+.claude/settings.local.json
+
+# Environment variables and secrets (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+*.swp
+*~
