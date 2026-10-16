@@ -17,6 +17,9 @@ All authoritative policies live in `docs/standards/`. Do not duplicate their pro
 
 - **Testing Standard:** @docs/standards/testing-standard.md
 - **Performance Testing & SLA Standard:** @docs/standards/performance-sla.md
+- **Complexity & Performance Analysis Standard:** @docs/standards/complexity-and-performance.md
+- **Root Cause Analysis (RCA) Playbook:** @docs/standards/rca-playbook.md
+- **Quota & Token Efficiency Standard:** @docs/standards/quota-efficiency.md
 - **Definition of Done (Story & Release):** @docs/standards/definition-of-done.md
 - **AI Boundary (Tiers 1, 2, 3):** @docs/standards/ai-boundary.md
 - **Security Baseline:** @docs/standards/security-baseline.md
@@ -31,11 +34,11 @@ Supporting references:
 ## 3. How the Standard Is Organized in Claude Code
 
 1. **Modular Rules (`.claude/rules/*.md`):** Automatically discovered, concise pointers (< 60 lines each) covering [code-style.md](./.claude/rules/code-style.md), [testing.md](./.claude/rules/testing.md), [api-conventions.md](./.claude/rules/api-conventions.md), [security.md](./.claude/rules/security.md), and [git-convention.md](./.claude/rules/git-convention.md).
-2. **Slash Commands (`.claude/commands/*.md`):** Explicit step sequences invoked as `/plan-feature`, `/review`, `/test-all`, and `/release-checklist`.
-3. **Skills (`.claude/skills/*/SKILL.md`):** On-demand runbooks (< 80 lines each) for `test-writer`, `security-audit`, `code-review`, and `perf-test`.
+2. **Slash Commands & Unified Skills (`.claude/skills/*/SKILL.md` & `.claude/commands/*.md`):** On-demand runbooks (< 80 lines each) synced from `.agents/skills/` via `python3 -m trellis_mcp --sync-workspace`: `/pb-rca`, `/pb-spec`, `/pb-enhance`, `/pb-handoff`, `/pb-review`, `/pb-plan`, `/pb-release-check`, `test-writer`, `security-audit`, `code-review`, and `perf-test`.
+3. **MCP Server (`trellis-mcp` in `.mcp.json`):** Zero-dependency Python MCP server providing `trellis_get_standard`, `trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_handoff`, `trellis_review`, and `trellis_doctor`.
 4. **Subagents (`.claude/agents/*.md`):** Isolated specialist agents with minimum required tools: read-only `code-reviewer` and `security-auditor`, plus `test-writer`.
 5. **Hooks (`.claude/hooks/*.sh`):** Simple, readable enforcement scripts (`validate-bash.sh`, `secret-scan.sh`, `run-tests.sh`). Hooks are **not** wired into `.claude/settings.json` until explicitly approved `[VERIFY]`.
-6. **Review Gate Templates (`templates/*.md`):** Shared fill-in templates for [implementation-plan.md](./templates/implementation-plan.md), [walkthrough.md](./templates/walkthrough.md), [test-plan.md](./templates/test-plan.md), and [pull_request_template.md](./templates/pull_request_template.md).
+6. **Review Gate Templates (`templates/*.md`):** Shared fill-in templates for [spec-template.md](./templates/spec-template.md), [implementation-plan.md](./templates/implementation-plan.md), [walkthrough.md](./templates/walkthrough.md), [test-plan.md](./templates/test-plan.md), and [pull_request_template.md](./templates/pull_request_template.md).
 
 ---
 
