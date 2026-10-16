@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "trellis-mcp": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "trellis_mcp"
+      ],
+      "env": {
+        "PYTHONPATH": "."
+      }
+    }
+  }
+}

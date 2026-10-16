@@ -1,4 +1,9 @@
-# Antigravity Rule: Git & Commit Conventions `[VERIFY .agent vs .agents]`
+---
+trigger: always_on
+description: Conventional Commit rules, 72-char lowercase imperative subject, and semantic branch naming
+---
+
+# Antigravity Rule: Git & Commit Conventions
 
 **Canonical Source of Truth:**
 - [Git Convention & Commit Guidelines](../../docs/standards/git-convention.md)
