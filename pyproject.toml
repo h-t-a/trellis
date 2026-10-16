@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trellis-mcp"
+version = "0.1.0"
+description = "Zero-dependency MCP server and cross-device skill/rule installer for the Trellis AI Engineering Playbook"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "HTA" }
+]
+dependencies = []
+
+[project.scripts]
+trellis-mcp = "trellis_mcp.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["trellis_mcp*"]

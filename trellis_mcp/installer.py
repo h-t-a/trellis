@@ -1,0 +1,333 @@
+"""Cross-device workspace synchronization and global user-level installer ([REQ-MCP-03]).
+
+Supports:
+- `sync_workspace(repo_root)`: Syncs `.agents/skills/` -> `.claude/skills/`, updates `.mcp.json`
+  and `.agents/mcp_config.json`, and removes deprecated `.agents/workflows/*.md`.
+- `install_global(repo_root, home_dir)`: Installs the `trellis` Antigravity plugin into
+  `~/.gemini/config/plugins/trellis/`, registers `trellis-mcp` in `~/.gemini/config/mcp_config.json`,
+  and installs `/pb-*` skills into `~/.claude/skills/`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
+
+from trellis_mcp import __version__
+
+
+def _merge_mcp_config(config_path: Path, server_entry: dict[str, Any]) -> None:
+    """Safely merge `trellis-mcp` into an existing or new MCP JSON config file."""
+    data: dict[str, Any] = {"mcpServers": {}}
+    if config_path.exists():
+        try:
+            loaded = json.loads(config_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except json.JSONDecodeError:
+            data = {"mcpServers": {}}
+
+    if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
+        data["mcpServers"] = {}
+
+    data["mcpServers"]["trellis-mcp"] = server_entry
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def sync_workspace(repo_root: Path) -> str:
+    """Synchronize `.agents/skills/` to `.claude/skills/` and configure workspace MCP files."""
+    root = repo_root.resolve()
+    agents_skills_dir = root / ".agents" / "skills"
+    claude_skills_dir = root / ".claude" / "skills"
+    claude_commands_dir = root / ".claude" / "commands"
+
+    synced_skills: list[str] = []
+    if agents_skills_dir.exists():
+        claude_skills_dir.mkdir(parents=True, exist_ok=True)
+        claude_commands_dir.mkdir(parents=True, exist_ok=True)
+        for skill_md in sorted(agents_skills_dir.glob("*/SKILL.md")):
+            skill_name = skill_md.parent.name
+            dest_skill_dir = claude_skills_dir / skill_name
+            dest_skill_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(skill_md, dest_skill_dir / "SKILL.md")
+            synced_skills.append(skill_name)
+
+            # For /pb-* skills, also mirror to .claude/commands/<name>.md for Claude Code slash command compatibility
+            if skill_name.startswith("pb-"):
+                shutil.copyfile(skill_md, claude_commands_dir / f"{skill_name}.md")
+
+    # Remove deprecated .agents/workflows/*.md files (F01)
+    workflows_dir = root / ".agents" / "workflows"
+    removed_workflows: list[str] = []
+    if workflows_dir.exists():
+        for wf in sorted(workflows_dir.glob("*.md")):
+            removed_workflows.append(wf.name)
+            wf.unlink()
+        if not any(workflows_dir.iterdir()):
+            workflows_dir.rmdir()
+
+    # Ensure .agents/skills.json exists
+    skills_manifest = root / ".agents" / "skills.json"
+    skills_manifest.parent.mkdir(parents=True, exist_ok=True)
+    skills_manifest.write_text(
+        json.dumps({"skills": [{"path": ".agents/skills"}]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    # Configure workspace .mcp.json and .agents/mcp_config.json
+    workspace_mcp_entry = {
+        "command": "python3",
+        "args": ["-m", "trellis_mcp"],
+        "env": {"PYTHONPATH": "."},
+    }
+    _merge_mcp_config(root / ".mcp.json", workspace_mcp_entry)
+    _merge_mcp_config(root / ".agents" / "mcp_config.json", workspace_mcp_entry)
+
+    return (
+        f"Synced {len(synced_skills)} skills ({', '.join(synced_skills)}) to `.claude/skills/`, "
+        f"updated `.mcp.json` and `.agents/mcp_config.json` with `trellis-mcp`, "
+        f"and removed {len(removed_workflows)} deprecated `.agents/workflows/*.md` file(s)."
+    )
+
+
+def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
+    """Install Trellis plugin, rules, skills, and `trellis-mcp` globally into the user's home directory."""
+    root = repo_root.resolve()
+    home = (home_dir or Path.home()).resolve()
+
+    plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
+    plugin_rules_dir = plugin_dir / "rules"
+    plugin_skills_dir = plugin_dir / "skills"
+    plugin_rules_dir.mkdir(parents=True, exist_ok=True)
+    plugin_skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Write plugin.json
+    plugin_manifest = {
+        "name": "trellis",
+        "version": __version__,
+        "description": "Trellis AI Engineering Playbook: Fast RCA, Spec-Driven Dev, Complexity/Little's Law, Quota Guards, and DoD Review.",
+        "author": {"name": "HTA"},
+        "rules": "rules/AGENTS.md",
+        "skills": "skills",
+        "mcpServers": ".mcp.json",
+    }
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(plugin_manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+    # 2. Write global plugin rules/AGENTS.md combining workspace rules with YAML frontmatter
+    standards_rule = root / ".agents" / "rules" / "standards.md"
+    if standards_rule.exists():
+        shutil.copyfile(standards_rule, plugin_rules_dir / "AGENTS.md")
+    else:
+        (plugin_rules_dir / "AGENTS.md").write_text(
+            "---\ntrigger: always_on\ndescription: Trellis AI Engineering Playbook global rules\n---\n\n"
+            "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`).\n",
+            encoding="utf-8",
+        )
+
+    # 3. Copy all workspace skills into ~/.gemini/config/plugins/trellis/skills/ and ~/.claude/skills/
+    agents_skills_dir = root / ".agents" / "skills"
+    claude_global_skills = home / ".claude" / "skills"
+    claude_global_skills.mkdir(parents=True, exist_ok=True)
+
+    installed_skills: list[str] = []
+    if agents_skills_dir.exists():
+        for skill_md in sorted(agents_skills_dir.glob("*/SKILL.md")):
+            skill_name = skill_md.parent.name
+            for target_base in (plugin_skills_dir, claude_global_skills):
+                dest = target_base / skill_name
+                dest.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(skill_md, dest / "SKILL.md")
+            installed_skills.append(skill_name)
+
+    # 4. Write global MCP server entry with portable PYTHONPATH pointing to repo_root
+    global_mcp_entry = {
+        "command": "python3",
+        "args": ["-m", "trellis_mcp"],
+        "env": {"PYTHONPATH": str(root)},
+    }
+    _merge_mcp_config(plugin_dir / ".mcp.json", global_mcp_entry)
+    _merge_mcp_config(home / ".gemini" / "config" / "mcp_config.json", global_mcp_entry)
+
+    return (
+        f"Installed `trellis-mcp` globally:\n"
+        f"- Antigravity plugin: `{plugin_dir}`\n"
+        f"- Global MCP config: `{home / '.gemini/config/mcp_config.json'}`\n"
+        f"- Claude Code global skills: `{claude_global_skills}` ({len(installed_skills)} skills)"
+    )
+
+
+def build_remote_bundle(repo_root: Path) -> dict[str, Any]:
+    """Build a JSON-serializable bundle of rules and skills for zero-clone remote clients ([REQ-MCP-07])."""
+    root = repo_root.resolve()
+    skills: dict[str, str] = {}
+    skills_dir = root / ".agents" / "skills"
+    if skills_dir.exists():
+        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+            skills[skill_md.parent.name] = skill_md.read_text(encoding="utf-8")
+
+    rules_md = (
+        "---\ntrigger: always_on\ndescription: Trellis AI Engineering Playbook global rules\n---\n\n"
+        "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`).\n"
+    )
+    standards_rule = root / ".agents" / "rules" / "standards.md"
+    if standards_rule.exists():
+        rules_md = standards_rule.read_text(encoding="utf-8")
+
+    return {
+        "version": __version__,
+        "rules_md": rules_md,
+        "skills": skills,
+    }
+
+
+def install_remote(
+    server_url: str,
+    api_key: str | None = None,
+    home_dir: Path | None = None,
+) -> str:
+    """Zero-clone client installer: fetches `/bundle.json` from a remote VM and configures MCP + skills ([REQ-MCP-07])."""
+    base = server_url.rstrip("/")
+    if base.endswith("/mcp"):
+        base = base[:-4]
+    mcp_endpoint = f"{base}/mcp"
+    bundle_endpoint = f"{base}/bundle.json"
+
+    resolved_key = (api_key or os.environ.get("TRELLIS_API_KEY", "")).strip()
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if resolved_key:
+        headers["Authorization"] = f"Bearer {resolved_key}"
+
+    req = Request(bundle_endpoint, headers=headers, method="GET")
+    from trellis_mcp.http_server import open_url_resilient
+
+    with open_url_resilient(req, timeout=15) as resp:
+        bundle = json.loads(resp.read().decode("utf-8"))
+
+    home = (home_dir or Path.home()).resolve()
+    plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
+    plugin_rules_dir = plugin_dir / "rules"
+    plugin_skills_dir = plugin_dir / "skills"
+    claude_global_skills = home / ".claude" / "skills"
+    plugin_rules_dir.mkdir(parents=True, exist_ok=True)
+    plugin_skills_dir.mkdir(parents=True, exist_ok=True)
+    claude_global_skills.mkdir(parents=True, exist_ok=True)
+
+    plugin_manifest = {
+        "name": "trellis",
+        "version": bundle.get("version", __version__),
+        "description": "Trellis AI Engineering Playbook (Remote VM MCP + Global Skills)",
+        "author": {"name": "HTA"},
+        "rules": "rules/AGENTS.md",
+        "skills": "skills",
+        "mcpServers": ".mcp.json",
+    }
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(plugin_manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (plugin_rules_dir / "AGENTS.md").write_text(
+        str(bundle.get("rules_md", "")), encoding="utf-8"
+    )
+
+    skills_map: dict[str, str] = dict(bundle.get("skills") or {})
+    for skill_name, skill_content in sorted(skills_map.items()):
+        for target_base in (plugin_skills_dir, claude_global_skills):
+            dest = target_base / skill_name
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text(str(skill_content), encoding="utf-8")
+
+    remote_mcp_entry: dict[str, Any] = {
+        "serverUrl": mcp_endpoint,
+        "headers": {
+            "Authorization": f"Bearer {resolved_key}" if resolved_key else "Bearer ${TRELLIS_API_KEY}"
+        },
+    }
+    _merge_mcp_config(plugin_dir / ".mcp.json", remote_mcp_entry)
+    _merge_mcp_config(home / ".gemini" / "config" / "mcp_config.json", remote_mcp_entry)
+
+    return (
+        f"Installed remote `trellis-mcp` client (zero git clone):\n"
+        f"- Remote MCP endpoint: `{mcp_endpoint}`\n"
+        f"- Antigravity plugin: `{plugin_dir}`\n"
+        f"- Global MCP config: `{home / '.gemini/config/mcp_config.json'}`\n"
+        f"- Installed {len(skills_map)} `/pb-*` & engineering skills into `{claude_global_skills}`"
+    )
+
+
+def render_remote_install_script(base_url: str) -> str:
+    """Render a zero-clone POSIX shell script (`GET /install.sh`) for teammates on any machine."""
+    clean_base = base_url.rstrip("/")
+    return f"""#!/bin/sh
+# Zero-Clone Remote Installer for Trellis MCP ({clean_base})
+# Usage:
+#   export TRELLIS_API_KEY="<your-team-api-key>"
+#   curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" {clean_base}/install.sh | sh
+set -eu
+
+if [ -z "${{TRELLIS_API_KEY:-}}" ]; then
+  echo "Error: TRELLIS_API_KEY environment variable is not set." >&2
+  echo "Run: export TRELLIS_API_KEY='<team-key>' before running this installer." >&2
+  exit 1
+fi
+
+python3 - "{clean_base}" <<'PYEOF'
+import json, os, sys
+from pathlib import Path
+from urllib.request import Request, urlopen
+
+base = sys.argv[1].rstrip("/")
+key = os.environ["TRELLIS_API_KEY"].strip()
+req = Request(f"{{base}}/bundle.json", headers={{"Authorization": f"Bearer {{key}}", "Accept": "application/json"}})
+with urlopen(req, timeout=15) as resp:
+    bundle = json.loads(resp.read().decode("utf-8"))
+
+home = Path.home()
+plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
+(plugin_dir / "rules").mkdir(parents=True, exist_ok=True)
+(plugin_dir / "skills").mkdir(parents=True, exist_ok=True)
+claude_skills = home / ".claude" / "skills"
+claude_skills.mkdir(parents=True, exist_ok=True)
+
+(plugin_dir / "plugin.json").write_text(json.dumps({{
+    "name": "trellis",
+    "version": bundle.get("version", "0.1.0"),
+    "description": "Trellis AI Engineering Playbook (Remote VM MCP)",
+    "author": {{"name": "HTA"}},
+    "rules": "rules/AGENTS.md",
+    "skills": "skills",
+    "mcpServers": ".mcp.json",
+}}, indent=2) + "\\n", encoding="utf-8")
+
+(plugin_dir / "rules" / "AGENTS.md").write_text(bundle.get("rules_md", ""), encoding="utf-8")
+
+for name, text in bundle.get("skills", {{}}).items():
+    for root in (plugin_dir / "skills", claude_skills):
+        d = root / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(text, encoding="utf-8")
+
+entry = {{
+    "serverUrl": f"{{base}}/mcp",
+    "headers": {{"Authorization": f"Bearer {{key}}"}}
+}}
+for cfg in (plugin_dir / ".mcp.json", home / ".gemini" / "config" / "mcp_config.json"):
+    data = {{"mcpServers": {{}}}}
+    if cfg.exists():
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:
+            data = {{"mcpServers": {{}}}}
+    data.setdefault("mcpServers", {{}})["trellis-mcp"] = entry
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+
+print(f"Installed remote trellis-mcp -> {{base}}/mcp ({{len(bundle.get('skills', {{}}))}} skills)")
+PYEOF
+"""
