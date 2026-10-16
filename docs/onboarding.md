@@ -18,7 +18,42 @@ Regardless of which agentic platform, model, or workflow you use, every non-triv
 
 ---
 
-## 2. Getting Started in Each Tool
+## 2. Getting Started in Each Tool (Workspace & Any Device)
+
+### 2.0 Install Globally Across Your Device (`trellis-mcp`)
+To make all Trellis `/pb-*` slash skills, rules, and MCP tools available in **every project on your machine** (Antigravity IDE, Claude Code, Cursor, VS Code):
+```bash
+# Option A: Local machine install (from a central ~/trellis clone)
+python3 -m trellis_mcp --install-global
+
+# Validate workspace rules, skill line budgets, and YAML frontmatter
+python3 -m trellis_mcp --check
+```
+
+#### Option B: Private VM Hosting & Zero-Clone Teammate Setup (`[REQ-MCP-05..07]`)
+1. **On your Private VM:**
+   ```bash
+   export TRELLIS_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+   python3 -m trellis_mcp --serve-http --host 0.0.0.0 --port 8080
+   ```
+2. **On any teammate's machine (Zero Git Clone required):**
+   ```bash
+   export TRELLIS_API_KEY="<team-api-key>"
+   curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" http://<vm-ip>:8080/install.sh | sh
+   ```
+   Or configure `~/.gemini/config/mcp_config.json` directly:
+   ```json
+   {
+     "mcpServers": {
+       "trellis-mcp": {
+         "serverUrl": "http://<vm-ip>:8080/mcp",
+         "headers": {
+           "Authorization": "Bearer <team-api-key>"
+         }
+       }
+     }
+   }
+   ```
 
 ### 2.1 Using Claude Code `[VERIFIED]`
 1. **Local Setup:**
@@ -26,21 +61,24 @@ Regardless of which agentic platform, model, or workflow you use, every non-triv
    - Create `CLAUDE.local.md` for personal, machine-local notes (already gitignored).
    - Review `.claude/settings.json` permissions before running on a real repository `[VERIFY]`.
 2. **Verify Loaded Context:**
-   - Run `/context` in Claude Code to confirm `CLAUDE.md`, `@docs/standards/...` imports, and `.claude/rules/*.md` are loaded.
+   - Run `/context` in Claude Code to confirm `CLAUDE.md`, `@docs/standards/...` imports, `.claude/rules/*.md`, and `trellis-mcp` tools are loaded.
    - Use `/memory` if you need to inspect or edit memory files.
-3. **Daily Commands & Subagents:**
-   - Run `/plan-feature` (`.claude/commands/plan-feature.md`) to draft an Implementation Plan and pause for human approval.
-   - Run `/test-all`, `/review`, or `/release-checklist` at verification milestones.
+3. **Daily Commands, MCP Tools & Subagents:**
+   - Run `/pb-spec` or `/pb-plan` to draft a Spec or Implementation Plan and pause for human approval.
+   - Run `/pb-rca` for 9-step root-cause analysis, `/pb-enhance` for Little's Law & complexity sizing, `/pb-handoff` before `/clear`, and `/pb-review` or `/pb-release-check` at verification milestones.
    - Delegate isolated checks to read-only subagents (`code-reviewer`, `security-auditor`) or `test-writer` in `.claude/agents/`.
 
-### 2.2 Using Antigravity IDE `[SOURCE: Developers]` `[VERIFY]`
+### 2.2 Using Antigravity IDE `[VERIFIED]`
 1. **Local Setup:**
-   - Configure agent permissions via `/permissions` and set up the browser allowlist/denylist (using the separate Chrome profile) before first use on a real project.
-   - Confirm that `GEMINI.md` and `.agents/rules/standards.md` are discovered in your installed Antigravity version `[VERIFY]`.
-2. **Daily Workflows, Skills, and Artifacts:**
-   - Invoke `/plan-feature` (or `/plan`) to generate an **Implementation Plan artifact**. Review and approve the artifact at the milestone gate before code changes begin.
-   - Use workspace skills (`test-writer`, `security-audit`, `code-review`, `perf-test`) in `.agents/skills/` for task-specific runbooks.
-   - After implementation, review the **Walkthrough artifact** (`templates/walkthrough.md`), code diffs, and test evidence via `/review` and `/release-checklist`.
+   - Run `python3 -m trellis_mcp --install-global` once per machine so `~/.gemini/config/plugins/trellis/` and `~/.gemini/config/mcp_config.json` are registered globally.
+   - Confirm that `GEMINI.md` and `.agents/rules/*.md` (each with `trigger: always_on` YAML frontmatter) are loaded in the Customize -> Rules panel.
+2. **3-Surface Command Comparison Table (`F05`):**
+
+| Surface | Built-in / Custom Commands | Where Defined | Purpose |
+| :--- | :--- | :--- | :--- |
+| **1. Antigravity IDE Built-in Slash (`/`)** | `/plan`, `/goal`, `/compact`, `/schedule`, `/browser`, `/grill-me`, `/teamwork-preview`, `/learn`, `/boost` | Built into Antigravity IDE chat UI | Native IDE agent modes (planning, context compaction, browser, deep reasoning) |
+| **2. Claude Code CLI Built-in Slash (`/`)** | `/clear`, `/compact`, `/context`, `/cost`, `/doctor`, `/init`, `/mcp`, `/memory`, `/model`, `/permissions`, `/plan`, `/review` | Built into Claude Code CLI | Session management, token/cost inspection, permission gates |
+| **3. Trellis Custom Skills & MCP Tools (`/pb-*` & `trellis_*`)** | `/pb-rca` (`trellis_rca`), `/pb-spec` (`trellis_spec`), `/pb-enhance` (`trellis_enhance`), `/pb-handoff` (`trellis_handoff`), `/pb-review` (`trellis_review`), `/pb-plan`, `/pb-release-check`, `trellis_budget`, `trellis_get_standard`, `trellis_doctor` | `.agents/skills/*/SKILL.md`, `.claude/skills/*/SKILL.md`, and `trellis_mcp` server | Enforced Trellis engineering workflows, Tier 3 redaction gates, and Little's Law / quota guards |
 
 ---
 

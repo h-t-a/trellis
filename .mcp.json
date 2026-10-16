@@ -1,4 +1,15 @@
 {
   "_comment": "Shared MCP server configuration placeholder (tracked in git). SECURITY BASELINE: Never place real secrets, tokens, or production database connections here. Use least-privilege / read-only scopes (DB_READONLY=true) and environment variable references. No servers are enabled by default. [TO RESEARCH: approved MCP servers per project]",
-  "mcpServers": {}
+  "mcpServers": {
+    "trellis-mcp": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "trellis_mcp"
+      ],
+      "env": {
+        "PYTHONPATH": "."
+      }
+    }
+  }
 }

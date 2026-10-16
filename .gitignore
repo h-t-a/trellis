@@ -14,3 +14,12 @@ settings.local.json
 Thumbs.db
 *.swp
 *~
+
+# Python bytecode and packaging artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.pytest_cache/
