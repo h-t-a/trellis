@@ -12,6 +12,7 @@ from trellis_mcp.tools import (
     PACKAGE_ROOT,
     STANDARD_FILE_MAP,
     TOOL_DEFINITIONS,
+    read_bundled_text,
     tool_trellis_budget,
     tool_trellis_doctor,
     tool_trellis_enhance,
@@ -171,12 +172,34 @@ class TrellisMCPServer:
 
             if method == "prompts/get":
                 name = str(params.get("name", ""))
+                skill_text = read_bundled_text(
+                    f".agents/skills/{name}/SKILL.md", workspace_root=self.workspace_root
+                )
+                if skill_text is not None:
+                    return self._response(
+                        msg_id,
+                        {
+                            "description": f"Trellis /{name} workflow prompt",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": {"type": "text", "text": skill_text},
+                                }
+                            ],
+                        },
+                    )
+                name = str(params.get("name", ""))
                 skill_file = self.workspace_root / ".agents" / "skills" / name / "SKILL.md"
                 if not skill_file.exists():
                     skill_file = PACKAGE_ROOT / ".agents" / "skills" / name / "SKILL.md"
                 if not skill_file.exists():
                     return self._error(msg_id, -32602, f"Unknown prompt/skill: {name}")
-                skill_text = skill_file.read_text(encoding="utf-8")
+                name = str(params.get("name", ""))
+                skill_text = read_bundled_text(
+                    f".agents/skills/{name}/SKILL.md", workspace_root=self.workspace_root
+                )
+                if skill_text is None:
+                    return self._error(msg_id, -32602, f"Unknown prompt/skill: {name}")
                 return self._response(
                     msg_id,
                     {

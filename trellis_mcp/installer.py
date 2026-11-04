@@ -1,4 +1,4 @@
-"""Cross-device workspace synchronization and global user-level installer ([REQ-MCP-03]).
+"""Cross-device workspace synchronization, global user-level installer, and single-file .pyz bundler ([REQ-MCP-03, REQ-MCP-07, REQ-MCP-09]).
 
 Supports:
 - `sync_workspace(repo_root)`: Syncs `.agents/skills/` -> `.claude/skills/`, updates `.mcp.json`
@@ -6,19 +6,24 @@ Supports:
 - `install_global(repo_root, home_dir)`: Installs the `trellis` Antigravity plugin into
   `~/.gemini/config/plugins/trellis/`, registers `trellis-mcp` in `~/.gemini/config/mcp_config.json`,
   and installs `/pb-*` skills into `~/.claude/skills/`.
+- `build_pyz_bundle(repo_root, output_path)`: Packs `trellis_mcp`, `docs/standards/`, `templates/`,
+  and `.agents/` into a single standalone `trellis-mcp.pyz` executable archive (`[REQ-MCP-09]`).
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
+import sys
+import zipfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-from urllib.request import ProxyHandler, Request, build_opener, urlopen
+from urllib.request import Request
 
 from trellis_mcp import __version__
+from trellis_mcp.tools import list_bundled_skills, read_bundled_text
 
 
 def _merge_mcp_config(config_path: Path, server_entry: dict[str, Any]) -> None:
@@ -81,8 +86,9 @@ def sync_workspace(repo_root: Path) -> str:
     )
 
     # Configure workspace .mcp.json and .agents/mcp_config.json
+    py_cmd = "python" if sys.platform == "win32" else "python3"
     workspace_mcp_entry = {
-        "command": "python3",
+        "command": py_cmd,
         "args": ["-m", "trellis_mcp"],
         "env": {"PYTHONPATH": "."},
     }
@@ -122,9 +128,9 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
     )
 
     # 2. Write global plugin rules/AGENTS.md combining workspace rules with YAML frontmatter
-    standards_rule = root / ".agents" / "rules" / "standards.md"
-    if standards_rule.exists():
-        shutil.copyfile(standards_rule, plugin_rules_dir / "AGENTS.md")
+    standards_rule_text = read_bundled_text(".agents/rules/standards.md", workspace_root=root)
+    if standards_rule_text:
+        (plugin_rules_dir / "AGENTS.md").write_text(standards_rule_text, encoding="utf-8")
     else:
         (plugin_rules_dir / "AGENTS.md").write_text(
             "---\ntrigger: always_on\ndescription: Trellis AI Engineering Playbook global rules\n---\n\n"
@@ -133,23 +139,22 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
         )
 
     # 3. Copy all workspace skills into ~/.gemini/config/plugins/trellis/skills/ and ~/.claude/skills/
-    agents_skills_dir = root / ".agents" / "skills"
     claude_global_skills = home / ".claude" / "skills"
     claude_global_skills.mkdir(parents=True, exist_ok=True)
 
+    bundled_skills = list_bundled_skills(workspace_root=root)
     installed_skills: list[str] = []
-    if agents_skills_dir.exists():
-        for skill_md in sorted(agents_skills_dir.glob("*/SKILL.md")):
-            skill_name = skill_md.parent.name
-            for target_base in (plugin_skills_dir, claude_global_skills):
-                dest = target_base / skill_name
-                dest.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(skill_md, dest / "SKILL.md")
-            installed_skills.append(skill_name)
+    for skill_name, skill_text in sorted(bundled_skills.items()):
+        for target_base in (plugin_skills_dir, claude_global_skills):
+            dest = target_base / skill_name
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text(skill_text, encoding="utf-8")
+        installed_skills.append(skill_name)
 
     # 4. Write global MCP server entry with portable PYTHONPATH pointing to repo_root
+    py_cmd = "python" if sys.platform == "win32" else "python3"
     global_mcp_entry = {
-        "command": "python3",
+        "command": py_cmd,
         "args": ["-m", "trellis_mcp"],
         "env": {"PYTHONPATH": str(root)},
     }
@@ -165,27 +170,61 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
 
 
 def build_remote_bundle(repo_root: Path) -> dict[str, Any]:
-    """Build a JSON-serializable bundle of rules and skills for zero-clone remote clients ([REQ-MCP-07])."""
+    """Build a JSON-serializable bundle of rules and skills for zero-clone remote clients ([REQ-MCP-07, REQ-MCP-09])."""
     root = repo_root.resolve()
-    skills: dict[str, str] = {}
-    skills_dir = root / ".agents" / "skills"
-    if skills_dir.exists():
-        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
-            skills[skill_md.parent.name] = skill_md.read_text(encoding="utf-8")
+    skills = list_bundled_skills(workspace_root=root)
 
-    rules_md = (
+    rules_md = read_bundled_text(".agents/rules/standards.md", workspace_root=root) or (
         "---\ntrigger: always_on\ndescription: Trellis AI Engineering Playbook global rules\n---\n\n"
         "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`).\n"
     )
-    standards_rule = root / ".agents" / "rules" / "standards.md"
-    if standards_rule.exists():
-        rules_md = standards_rule.read_text(encoding="utf-8")
 
     return {
         "version": __version__,
         "rules_md": rules_md,
         "skills": skills,
     }
+
+
+def build_pyz_bundle(repo_root: Path, output_path: Path) -> str:
+    """Pack `trellis_mcp`, `docs/standards/`, `templates/`, and `.agents/` into a single standalone `.pyz` file ([REQ-MCP-09])."""
+    root = repo_root.resolve()
+    out = output_path.resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    buf = io.BytesIO()
+    included_count = 0
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # Entrypoint for `python trellis-mcp.pyz`
+        zf.writestr(
+            "__main__.py",
+            "import sys\nfrom trellis_mcp.__main__ import main\nraise SystemExit(main())\n",
+        )
+        include_patterns = [
+            "trellis_mcp/*.py",
+            "docs/standards/*.md",
+            "templates/*.md",
+            ".agents/rules/*.md",
+            ".agents/skills/*/SKILL.md",
+        ]
+        for pattern in include_patterns:
+            for file_path in sorted(root.glob(pattern)):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(root).as_posix()
+                    zf.write(file_path, arcname=arcname)
+                    included_count += 1
+
+    with out.open("wb") as f:
+        f.write(b"#!/usr/bin/env python3\n")
+        f.write(buf.getvalue())
+
+    try:
+        os.chmod(out, 0o755)
+    except OSError:
+        pass
+
+    size_kb = out.stat().st_size / 1024.0
+    return f"Built standalone single-file bundle: {out} ({included_count} files, {size_kb:.1f} KB)"
 
 
 def install_remote(

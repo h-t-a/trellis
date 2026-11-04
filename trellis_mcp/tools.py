@@ -7,6 +7,7 @@ Each tool returns a standard MCP CallToolResult dictionary:
 from __future__ import annotations
 
 import re
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,43 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
+def read_bundled_text(rel_path: str, workspace_root: Path | None = None) -> str | None:
+    """Read a bundled markdown/resource file from disk or from a standalone .pyz zip archive ([REQ-MCP-09])."""
+    norm_rel = rel_path.replace("\\", "/").lstrip("/")
+    for base in (workspace_root, PACKAGE_ROOT):
+        if base is not None and base.is_dir():
+            candidate = base / norm_rel
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8")
+        if base is not None and base.is_file() and zipfile.is_zipfile(base):
+            with zipfile.ZipFile(base, "r") as zf:
+                if norm_rel in zf.namelist():
+                    return zf.read(norm_rel).decode("utf-8")
+    return None
+
+
+def list_bundled_skills(workspace_root: Path | None = None) -> dict[str, str]:
+    """Return a map of `{skill_name: skill_markdown}` from disk or from a standalone .pyz zip archive ([REQ-MCP-09])."""
+    skills: dict[str, str] = {}
+    for base in (workspace_root, PACKAGE_ROOT):
+        if base is not None and base.is_dir():
+            skills_dir = base / ".agents" / "skills"
+            if skills_dir.is_dir():
+                for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+                    skills[skill_md.parent.name] = skill_md.read_text(encoding="utf-8")
+                if skills:
+                    return skills
+        if base is not None and base.is_file() and zipfile.is_zipfile(base):
+            with zipfile.ZipFile(base, "r") as zf:
+                for entry_name in sorted(zf.namelist()):
+                    parts = entry_name.split("/")
+                    if len(parts) == 4 and parts[0] == ".agents" and parts[1] == "skills" and parts[3] == "SKILL.md":
+                        skills[parts[2]] = zf.read(entry_name).decode("utf-8")
+            if skills:
+                return skills
+    return skills
+
+
 def _resolve_root(workspace_root: Path | None) -> Path:
     if workspace_root and (workspace_root / "docs" / "standards").exists():
         return workspace_root
@@ -122,13 +160,20 @@ def tool_trellis_get_standard(
             f"Unknown standard '{name}'. Available: {', '.join(sorted(STANDARD_FILE_MAP.keys()))}"
         )
 
+    content = read_bundled_text(rel_path, workspace_root=root)
+    if content is not None:
+        return _ok(content)
     target = root / rel_path
     if not target.exists():
         target = PACKAGE_ROOT / rel_path
     if not target.exists():
         return _err(f"Standard file not found on disk: {rel_path}")
 
-    return _ok(target.read_text(encoding="utf-8"))
+    content = read_bundled_text(rel_path, workspace_root=root)
+    if content is None:
+        return _err(f"Standard file not found on disk: {rel_path}")
+
+    return _ok(content)
 
 
 def _scan_redaction_violations(text: str) -> list[str]:
