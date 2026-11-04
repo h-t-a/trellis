@@ -369,5 +369,171 @@ class TestTrellisMCPServer(unittest.TestCase):
             self.assertIn("trigger: always_on", doc_text)
 
 
+    def test_req_mcp_08_auto_generate_admin_key_and_issue_team_keys(self) -> None:
+        """[REQ-MCP-08-01..05] Verify admin key auto-generation, team member key issuing, RBAC, and revocation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            keys_file = Path(tmp) / ".trellis_keys.json"
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=None,
+                auto_generate_key=True,
+                keys_file=keys_file,
+                workspace_root=self.repo_root,
+            ) as http_srv:
+                base_url = http_srv.base_url
+                admin_key = http_srv.api_key
+                self.assertTrue(admin_key.startswith("trl_admin_"))
+                self.assertTrue(keys_file.exists())
+
+                # 1. Admin issues a member key for another user/team via POST /admin/keys
+                issue_req = Request(
+                    f"{base_url}/admin/keys",
+                    data=json.dumps({"label": "team-ibanking", "role": "member"}).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {admin_key}",
+                    },
+                    method="POST",
+                )
+                with http_srv.open_request(issue_req) as issue_resp:
+                    self.assertEqual(issue_resp.status, 201)
+                    issued = json.loads(issue_resp.read().decode("utf-8"))
+                    member_key = issued["api_key"]
+                    member_key_id = issued["key_id"]
+                    self.assertTrue(member_key.startswith("trl_team_ibanking_"))
+                    self.assertEqual(issued["role"], "member")
+                    self.assertIn("/install.sh", issued["install_command"])
+
+                # 2. Member key can call POST /mcp and GET /bundle.json
+                mcp_req = Request(
+                    f"{base_url}/mcp",
+                    data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {member_key}",
+                    },
+                    method="POST",
+                )
+                with http_srv.open_request(mcp_req) as mcp_resp:
+                    self.assertEqual(mcp_resp.status, 200)
+
+                # 3. Member key is forbidden (403) from calling /admin/keys
+                forbid_req = Request(
+                    f"{base_url}/admin/keys",
+                    headers={"Authorization": f"Bearer {member_key}"},
+                    method="GET",
+                )
+                with self.assertRaises(HTTPError) as ctx_forbid:
+                    http_srv.open_request(forbid_req)
+                self.assertEqual(ctx_forbid.exception.code, 403)
+                ctx_forbid.exception.close()
+
+                # 4. Admin lists keys (GET /admin/keys) and revokes member key (DELETE /admin/keys/<id>)
+                list_req = Request(
+                    f"{base_url}/admin/keys",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    method="GET",
+                )
+                with http_srv.open_request(list_req) as list_resp:
+                    self.assertEqual(list_resp.status, 200)
+                    listed = json.loads(list_resp.read().decode("utf-8"))
+                    self.assertGreaterEqual(len(listed["keys"]), 2)
+
+                revoke_req = Request(
+                    f"{base_url}/admin/keys/{member_key_id}",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    method="DELETE",
+                )
+                with http_srv.open_request(revoke_req) as revoke_resp:
+                    self.assertEqual(revoke_resp.status, 200)
+
+                # 5. Revoked member key now receives 401 Unauthorized on POST /mcp
+                with self.assertRaises(HTTPError) as ctx_revoked:
+                    http_srv.open_request(mcp_req)
+                self.assertEqual(ctx_revoked.exception.code, 401)
+                ctx_revoked.exception.close()
+
+    def test_req_mcp_08_cli_key_management(self) -> None:
+        """[REQ-MCP-08-02, REQ-MCP-08-04] Verify CLI --generate-key, --list-keys, and --revoke-key."""
+        from trellis_mcp.__main__ import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keys_file = Path(tmp) / ".trellis_keys.json"
+            rc_gen = main(["--generate-key", "alice-dev", "--role", "member", "--keys-file", str(keys_file)])
+            self.assertEqual(rc_gen, 0)
+            self.assertTrue(keys_file.exists())
+
+            rc_list = main(["--list-keys", "--keys-file", str(keys_file)])
+            self.assertEqual(rc_list, 0)
+
+            rc_rev = main(["--revoke-key", "alice-dev", "--keys-file", str(keys_file)])
+            self.assertEqual(rc_rev, 0)
+
+    def test_req_mcp_09_build_and_run_standalone_pyz_bundle(self) -> None:
+        """[REQ-MCP-09] Verify --build-pyz creates a standalone single-file .pyz that serves standards and skills without repo folders."""
+        import subprocess
+        import sys
+        from trellis_mcp.__main__ import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            pyz_path = tmp_dir / "trellis-mcp.pyz"
+            rc = main(["--build-pyz", str(pyz_path)])
+            self.assertEqual(rc, 0)
+            self.assertTrue(pyz_path.exists())
+
+            # Run the standalone .pyz from tmp_dir (where no docs/ or .agents/ directories exist on disk)
+            probe_code = (
+                "import json, sys; "
+                f"sys.path.insert(0, {str(pyz_path)!r}); "
+                "from pathlib import Path; "
+                "from trellis_mcp.tools import tool_trellis_get_standard; "
+                "from trellis_mcp.installer import build_remote_bundle; "
+                f"empty_dir = Path({str(tmp_dir)!r}); "
+                "std = tool_trellis_get_standard({'name': 'testing-standard'}, workspace_root=empty_dir); "
+                "bundle = build_remote_bundle(empty_dir); "
+                "print(json.dumps({'isError': std.get('isError'), 'has_text': 'Testing' in std['content'][0]['text'], 'skill_count': len(bundle.get('skills', {}))}))"
+            )
+            proc = subprocess.run(
+                [sys.executable, "-c", probe_code],
+                cwd=str(tmp_dir),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            out = json.loads(proc.stdout.strip())
+            self.assertFalse(out["isError"])
+            self.assertTrue(out["has_text"])
+            self.assertGreaterEqual(out["skill_count"], 7)
+
+            # Verify admin-only HTTP hot-deploy endpoint (POST /admin/deploy)
+            target_workspace = tmp_dir / "vm_runtime"
+            target_workspace.mkdir(parents=True, exist_ok=True)
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                auto_generate_key=True,
+                keys_file=target_workspace / ".trellis_keys.json",
+                workspace_root=target_workspace,
+            ) as http_srv:
+                base_url = http_srv.base_url
+                admin_key = http_srv.api_key
+                deploy_req = Request(
+                    f"{base_url}/admin/deploy",
+                    data=pyz_path.read_bytes(),
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Authorization": f"Bearer {admin_key}",
+                    },
+                    method="POST",
+                )
+                with http_srv.open_request(deploy_req) as deploy_resp:
+                    self.assertEqual(deploy_resp.status, 200)
+                    deploy_data = json.loads(deploy_resp.read().decode("utf-8"))
+                    self.assertEqual(deploy_data["status"], "deployed")
+                    self.assertTrue((target_workspace / "trellis-mcp.pyz").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
