@@ -23,23 +23,40 @@ Regardless of which agentic platform, model, or workflow you use, every non-triv
 ### 2.0 Install Globally Across Your Device (`trellis-mcp`)
 To make all Trellis `/pb-*` slash skills, rules, and MCP tools available in **every project on your machine** (Antigravity IDE, Claude Code, Cursor, VS Code):
 ```bash
-# Option A: Local machine install (from a central ~/trellis clone)
+# Option A: Local machine install (from a central ~/trellis clone; use `python` on Windows)
 python3 -m trellis_mcp --install-global
 
 # Validate workspace rules, skill line budgets, and YAML frontmatter
 python3 -m trellis_mcp --check
 ```
 
-#### Option B: Private VM Hosting & Zero-Clone Teammate Setup (`[REQ-MCP-05..07]`)
-1. **On your Private VM:**
+#### Option B: Private VM Hosting, Admin Key Auto-Generation & Zero-Clone Teammate Setup (`[REQ-MCP-05..08]`)
+1. **On your Private VM (Start Server & Auto-Generate Admin Key):**
    ```bash
-   export TRELLIS_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-   python3 -m trellis_mcp --serve-http --host 0.0.0.0 --port 8080
+   # Auto-generates & persists an admin key (trl_admin_...) in .trellis_keys.json (0600)
+   python3 -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8080
    ```
-2. **On any teammate's machine (Zero Git Clone required):**
+2. **As Administrator — Generate, List, or Revoke Keys for Another User or Team:**
    ```bash
-   export TRELLIS_API_KEY="<team-api-key>"
+   # Via CLI on the VM (no restart required):
+   python3 -m trellis_mcp --generate-key team-ibanking --role member
+   python3 -m trellis_mcp --list-keys
+   python3 -m trellis_mcp --revoke-key team-ibanking
+
+   # Or remotely via HTTP POST /admin/keys:
+   curl -s -X POST http://<vm-ip>:8080/admin/keys \
+     -H "Authorization: Bearer <ADMIN_API_KEY>" \
+     -H "Content-Type: application/json" \
+     -d '{"label": "team-ibanking", "role": "member"}'
+   ```
+3. **On any teammate's machine (Zero Git Clone required):**
+   ```bash
+   # macOS / Linux / WSL / Git Bash:
+   export TRELLIS_API_KEY="<team-member-api-key>"
    curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" http://<vm-ip>:8080/install.sh | sh
+
+   # Windows PowerShell:
+   python -m trellis_mcp --install-remote http://<vm-ip>:8080 --api-key "<team-member-api-key>"
    ```
    Or configure `~/.gemini/config/mcp_config.json` directly:
    ```json
@@ -48,7 +65,7 @@ python3 -m trellis_mcp --check
        "trellis-mcp": {
          "serverUrl": "http://<vm-ip>:8080/mcp",
          "headers": {
-           "Authorization": "Bearer <team-api-key>"
+           "Authorization": "Bearer <team-member-api-key>"
          }
        }
      }
@@ -70,7 +87,7 @@ python3 -m trellis_mcp --check
 
 ### 2.2 Using Antigravity IDE `[VERIFIED]`
 1. **Local Setup:**
-   - Run `python3 -m trellis_mcp --install-global` once per machine so `~/.gemini/config/plugins/trellis/` and `~/.gemini/config/mcp_config.json` are registered globally.
+   - Run `python -m trellis_mcp --install-global` once per machine so `~/.gemini/config/plugins/trellis/` and `~/.gemini/config/mcp_config.json` are registered globally.
    - Confirm that `GEMINI.md` and `.agents/rules/*.md` (each with `trigger: always_on` YAML frontmatter) are loaded in the Customize -> Rules panel.
 2. **3-Surface Command Comparison Table (`F05`):**
 
