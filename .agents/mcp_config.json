@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "trellis-mcp": {
-      "command": "python3",
+      "command": "python",
       "args": [
         "-m",
         "trellis_mcp"

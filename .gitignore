@@ -23,3 +23,10 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+
+# Local notice and operational documentation (never commit local notices or keys)
+NOTICE.md
+NOTICE
+*.notice.md
+.trellis_keys.json
+
