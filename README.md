@@ -126,9 +126,15 @@ Host `trellis-mcp` centrally on a Windows or Linux VM using the **standalone sin
 
 1. **Start the HTTP Server with Auto-Generated Administrator Key:**
    ```bash
-   python -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8080
+   # Local/loopback (recommended for development)
+   python -m trellis_mcp --serve-http --auto-generate-key --host 127.0.0.1 --port 8080
+
+   # Production: terminate TLS in the server (requires a PEM cert + key)
+   python -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8443 \
+     --tls-cert /path/server.crt --tls-key /path/server.key
    ```
-   - Automatically generates an `admin` key (`trl_admin_<random>`) on first boot and saves it to `.trellis_keys.json` (`0600` permissions, gitignored).
+   - Automatically generates an `admin` key (`trl_admin_<random>`) on first boot and persists it to `.trellis_keys.json` (gitignored). Only a salted SHA-256 hash is stored; the raw key is printed **once to stderr** and cannot be recovered from disk.
+   - Hardening defaults: keys are hashed at rest, support `--expires-days` and `--rotate-key`, HTTP requests are limited to `--max-body-bytes` (default 1 MiB), per-client rate limited (`--rate-limit`, default 120/window), and socket reads time out (`--request-timeout`).
 
 2. **Issue, List, and Revoke User or Team API Keys (As Administrator):**
    - **Via CLI on the VM (takes effect immediately without restarting the server):**
@@ -159,6 +165,8 @@ Host `trellis-mcp` centrally on a Windows or Linux VM using the **standalone sin
        -H "Authorization: Bearer <ADMIN_API_KEY>"
      ```
    - **RBAC Enforcement:** Keys issued with `"role": "member"` can access `POST /mcp`, `GET /bundle.json`, and `GET /install.sh`, but receive `403 Forbidden` on `/admin/keys`.
+   - **Bundle signing (optional):** Set `TRELLIS_BUNDLE_SIGNING_KEY` on the server to emit an `X-Trellis-Bundle-Signature` HMAC header on `/bundle.json` and `/install.sh`. Clients that set the same env var (or `--signing-key`) will refuse unsigned or tampered bundles.
+   - **Signed deploys:** `POST /admin/deploy` now requires `X-Trellis-Signature: HMAC-SHA256(payload, admin_bearer_token)`; `scripts/build-and-deploy.ps1` computes it automatically.
 
 3. **Zero-Clone Client Onboarding (for Teammates):**
    - **macOS / Linux / WSL / Git Bash:**

@@ -12,15 +12,20 @@ Exposes:
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import io
 import json
 import os
 import re
 import secrets
+import ssl
+import subprocess
+import sys
 import threading
+import time
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +39,54 @@ from trellis_mcp.server import TrellisMCPServer
 from trellis_mcp.tools import PACKAGE_ROOT
 
 _ACTIVE_SERVERS: dict[str, "TrellisHTTPServer"] = {}
+
+# Hardening defaults (P0 security gaps: DoS, signature, transport)
+DEFAULT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
+DEFAULT_RATE_LIMIT = 120  # requests allowed per client per window
+DEFAULT_RATE_WINDOW_SEC = 60.0
+DEFAULT_REQUEST_TIMEOUT_SEC = 15.0
+_SIGNATURE_HEADER = "x-trellis-signature"
+_BUNDLE_SIGNATURE_HEADER = "x-trellis-bundle-signature"
+
+
+def compute_hmac_signature(payload: bytes, key: str) -> str:
+    """Return a hex HMAC-SHA256 signature of `payload` using `key`."""
+    return hmac.new(key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def _hash_token(token: str, salt_hex: str) -> str:
+    """Return a salted SHA-256 hash for a high-entropy API token."""
+    return hashlib.sha256(bytes.fromhex(salt_hex) + token.encode("utf-8")).hexdigest()
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _restrict_key_file_permissions(path: Path) -> None:
+    """Best-effort owner-only permissions for the key registry on POSIX and Windows."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if os.name == "nt":
+        user = os.environ.get("USERNAME")
+        if not user:
+            return
+        try:
+            subprocess.run(
+                ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
 
 
 def extract_bearer_token(auth_header: str | None) -> str | None:
@@ -60,7 +113,7 @@ def verify_bearer_header(auth_header: str | None, expected_api_key: str) -> bool
 
 
 class TrellisKeyStore:
-    """File-backed API key registry supporting admin auto-generation and team/user keys ([REQ-MCP-08])."""
+    """File-backed API key registry with hashed-at-rest tokens, expiry, and rotation ([REQ-MCP-08])."""
 
     def __init__(self, keys_file: Path) -> None:
         self.keys_file = keys_file.resolve()
@@ -81,10 +134,7 @@ class TrellisKeyStore:
         self.keys_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": __version__, "keys": records}
         self.keys_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        try:
-            os.chmod(self.keys_file, 0o600)
-        except OSError:
-            pass
+        _restrict_key_file_permissions(self.keys_file)
 
     @staticmethod
     def _sanitize_record(rec: dict[str, Any]) -> dict[str, Any]:
@@ -94,11 +144,20 @@ class TrellisKeyStore:
             "role": rec.get("role", "member"),
             "prefix": rec.get("prefix"),
             "created_at": rec.get("created_at"),
+            "expires_at": rec.get("expires_at"),
+            "last_used_at": rec.get("last_used_at"),
             "revoked": bool(rec.get("revoked", False)),
         }
 
-    def generate_key(self, label: str, role: str = "member") -> dict[str, Any]:
-        """Generate and persist a new API key for a user or team ([REQ-MCP-08-02])."""
+    @staticmethod
+    def _is_expired(rec: dict[str, Any], now: datetime) -> bool:
+        expires_at = _parse_utc(rec.get("expires_at"))
+        return expires_at is not None and expires_at <= now
+
+    def generate_key(
+        self, label: str, role: str = "member", expires_days: float | None = None
+    ) -> dict[str, Any]:
+        """Generate and persist a new hashed API key for a user or team ([REQ-MCP-08-02])."""
         norm_role = role.strip().lower() if role else "member"
         if norm_role not in ("admin", "member"):
             raise ValueError("Role must be 'admin' or 'member'.")
@@ -106,16 +165,26 @@ class TrellisKeyStore:
         slug = slug[:24]
         raw_key = f"trl_{slug}_{secrets.token_urlsafe(24)}"
         key_id = f"key_{secrets.token_hex(6)}"
-        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now(timezone.utc)
+        created_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires_at = (
+            (now + timedelta(days=float(expires_days))).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if expires_days is not None
+            else None
+        )
+        salt = secrets.token_hex(16)
         prefix = f"{raw_key[:14]}...{raw_key[-4:]}"
 
         record = {
             "key_id": key_id,
             "label": label.strip() or slug,
             "role": norm_role,
-            "token": raw_key,
+            "salt": salt,
+            "token_hash": _hash_token(raw_key, salt),
             "prefix": prefix,
             "created_at": created_at,
+            "expires_at": expires_at,
+            "last_used_at": None,
             "revoked": False,
         }
         with self._lock:
@@ -127,31 +196,83 @@ class TrellisKeyStore:
         result["api_key"] = raw_key
         return result
 
-    def ensure_admin_key(self) -> tuple[str, bool]:
-        """Return an existing active admin key or auto-generate one ([REQ-MCP-08-01])."""
-        with self._lock:
-            records = self._load_records()
-            for rec in records:
-                if not rec.get("revoked") and rec.get("role") == "admin" and rec.get("token"):
-                    return str(rec["token"]), False
+    def ensure_admin_key(self) -> tuple[str | None, bool]:
+        """Return an existing active admin key or auto-generate one ([REQ-MCP-08-01]).
+
+        Returns `(raw_key, generated)`. `raw_key` is only available for legacy
+        plaintext records or when a new key is generated; hashed records cannot
+        be recovered, so `(None, False)` indicates an admin already exists.
+        """
+        now = datetime.now(timezone.utc)
+        records = self._load_records()
+        for rec in records:
+            if (
+                rec.get("revoked")
+                or rec.get("role") != "admin"
+                or self._is_expired(rec, now)
+            ):
+                continue
+            if rec.get("token"):
+                return str(rec["token"]), False
+            if rec.get("token_hash"):
+                return None, False
         created = self.generate_key(label="admin", role="admin")
         return str(created["api_key"]), True
 
+    def has_active_admin(self) -> bool:
+        now = datetime.now(timezone.utc)
+        records = self._load_records()
+        return any(
+            not rec.get("revoked")
+            and rec.get("role") == "admin"
+            and not self._is_expired(rec, now)
+            and (rec.get("token_hash") or rec.get("token"))
+            for rec in records
+        )
+
     def verify_token(self, candidate: str | None) -> str | None:
-        """Verify candidate Bearer token in constant time and return role ('admin' | 'member') or None."""
+        """Verify a candidate Bearer token in constant time and return its role or None."""
         if not candidate:
             return None
+        now = datetime.now(timezone.utc)
         cand_bytes = candidate.encode("utf-8")
         matched_role: str | None = None
         with self._lock:
             records = self._load_records()
-        for rec in records:
-            if rec.get("revoked"):
-                continue
-            token = str(rec.get("token", ""))
-            if token and hmac.compare_digest(cand_bytes, token.encode("utf-8")):
-                matched_role = str(rec.get("role", "member"))
+            dirty = False
+            for rec in records:
+                if rec.get("revoked") or self._is_expired(rec, now):
+                    continue
+                salt = rec.get("salt")
+                token_hash = rec.get("token_hash")
+                matched = False
+                if token_hash and salt:
+                    matched = hmac.compare_digest(_hash_token(candidate, str(salt)), str(token_hash))
+                elif rec.get("token"):
+                    matched = hmac.compare_digest(cand_bytes, str(rec["token"]).encode("utf-8"))
+                if matched:
+                    matched_role = str(rec.get("role", "member"))
+                    last_used = _parse_utc(rec.get("last_used_at"))
+                    if last_used is None or (now - last_used).total_seconds() > 60:
+                        rec["last_used_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        dirty = True
+            if dirty:
+                self._save_records(records)
         return matched_role
+
+    def find_active(self, id_or_label: str) -> dict[str, Any] | None:
+        """Return sanitized metadata for an active key by `key_id` or `label`."""
+        target = id_or_label.strip()
+        if not target:
+            return None
+        with self._lock:
+            records = self._load_records()
+        for rec in records:
+            if not rec.get("revoked") and (
+                rec.get("key_id") == target or rec.get("label") == target
+            ):
+                return self._sanitize_record(rec)
+        return None
 
     def list_keys(self) -> list[dict[str, Any]]:
         """Return sanitized metadata for all keys in the store."""
@@ -190,7 +311,17 @@ class TrellisHTTPServer:
         workspace_root: Path | None = None,
         auto_generate_key: bool = False,
         keys_file: Path | None = None,
+        tls_cert: Path | None = None,
+        tls_key: Path | None = None,
+        bundle_signing_key: str | None = None,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+        rate_limit: int = DEFAULT_RATE_LIMIT,
+        rate_window_sec: float = DEFAULT_RATE_WINDOW_SEC,
+        request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC,
     ) -> None:
+        if (tls_cert is None) != (tls_key is None):
+            raise ValueError("Both `tls_cert` and `tls_key` must be provided together for HTTPS.")
+
         self.workspace_root = (workspace_root or PACKAGE_ROOT).resolve()
         resolved_keys_file = (
             Path(keys_file)
@@ -204,14 +335,26 @@ class TrellisHTTPServer:
         if not resolved_key and auto_generate_key:
             resolved_key, self.auto_generated_admin_key = self.key_store.ensure_admin_key()
 
-        if not resolved_key:
+        if not resolved_key and not self.key_store.has_active_admin():
             raise ValueError(
                 "TRELLIS_API_KEY is required to start the HTTP server ([REQ-MCP-06]). "
                 "Set `export TRELLIS_API_KEY='<team-secret>'`, pass `--api-key`, or pass `--auto-generate-key`."
             )
         self.host = host
-        self.api_key = resolved_key
+        self.api_key = resolved_key or None
+        self.bundle_signing_key = (
+            bundle_signing_key
+            if bundle_signing_key is not None
+            else os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY", "")
+        ).strip() or None
+        self.max_body_bytes = int(max_body_bytes)
+        self.rate_limit = int(rate_limit)
+        self.rate_window_sec = float(rate_window_sec)
+        self.request_timeout_sec = float(request_timeout_sec)
+        self._rate_lock = threading.Lock()
+        self._rate_hits: dict[str, list[float]] = {}
         self.mcp_server = TrellisMCPServer(workspace_root=self.workspace_root)
+        self.scheme = "https" if tls_cert and tls_key else "http"
 
         parent = self
 
@@ -219,9 +362,55 @@ class TrellisHTTPServer:
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
                 return
 
+            def _send(self, status: int, headers: dict[str, str], body: bytes) -> None:
+                self.send_response(status)
+                for hk, hv in headers.items():
+                    self.send_header(hk, hv)
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
+
             def _handle_all(self, method: str) -> None:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+                try:
+                    self.connection.settimeout(parent.request_timeout_sec)
+                except OSError:
+                    pass
+
+                client_ip = self.client_address[0] if self.client_address else "unknown"
+                clean_path = self.path.split("?", 1)[0].rstrip("/") or "/"
+                if clean_path != "/healthz" and not parent._allow_request(client_ip):
+                    self._send(
+                        429,
+                        {
+                            "Content-Type": "application/json; charset=utf-8",
+                            "Retry-After": str(int(parent.rate_window_sec)),
+                        },
+                        b'{"error":"rate limit exceeded"}',
+                    )
+                    return
+
+                try:
+                    content_length = int(self.headers.get("Content-Length", "0") or "0")
+                except ValueError:
+                    content_length = 0
+                if content_length > parent.max_body_bytes:
+                    self._send(
+                        413,
+                        {"Content-Type": "application/json; charset=utf-8"},
+                        b'{"error":"request body exceeds max_body_bytes"}',
+                    )
+                    return
+
+                try:
+                    raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+                except TimeoutError:
+                    self._send(
+                        408,
+                        {"Content-Type": "application/json; charset=utf-8"},
+                        b'{"error":"request timed out"}',
+                    )
+                    return
+
                 req_headers = {k: v for k, v in self.headers.items()}
                 status, resp_headers, resp_body = parent.dispatch_http(
                     method=method,
@@ -229,12 +418,7 @@ class TrellisHTTPServer:
                     headers=req_headers,
                     body=raw_body,
                 )
-                self.send_response(status)
-                for hk, hv in resp_headers.items():
-                    self.send_header(hk, hv)
-                self.end_headers()
-                if resp_body:
-                    self.wfile.write(resp_body)
+                self._send(status, resp_headers, resp_body)
 
             def do_GET(self) -> None:  # noqa: N802
                 self._handle_all("GET")
@@ -247,17 +431,42 @@ class TrellisHTTPServer:
 
         self._httpd = ThreadingHTTPServer((host, port), _Handler)
         self.port = int(self._httpd.server_address[1])
+        if tls_cert and tls_key:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(certfile=str(tls_cert), keyfile=str(tls_key))
+            self._httpd.socket = context.wrap_socket(self._httpd.socket, server_side=True)
+        elif host not in ("127.0.0.1", "localhost", "::1"):
+            print(
+                "[trellis-mcp] WARNING: serving plaintext HTTP on a non-loopback interface. "
+                "Use --tls-cert/--tls-key or a TLS-terminating reverse proxy for production.",
+                file=sys.stderr,
+            )
         self._thread: threading.Thread | None = None
         _ACTIVE_SERVERS[self.base_url] = self
+
+    def _allow_request(self, client_ip: str) -> bool:
+        """Sliding-window per-client rate limiter (thread-safe)."""
+        if self.rate_limit <= 0:
+            return True
+        now = time.monotonic()
+        with self._rate_lock:
+            hits = [t for t in self._rate_hits.get(client_ip, []) if now - t < self.rate_window_sec]
+            if len(hits) >= self.rate_limit:
+                self._rate_hits[client_ip] = hits
+                return False
+            hits.append(now)
+            self._rate_hits[client_ip] = hits
+        return True
 
     @property
     def base_url(self) -> str:
         connect_host = "127.0.0.1" if self.host in ("0.0.0.0", "::") else self.host
-        return f"http://{connect_host}:{self.port}"
+        return f"{self.scheme}://{connect_host}:{self.port}"
 
     def _authenticate_role(self, auth_header: str | None) -> str | None:
         """Return 'admin', 'member', or None for the provided Authorization header."""
-        if verify_bearer_header(auth_header, self.api_key):
+        if self.api_key and verify_bearer_header(auth_header, self.api_key):
             return "admin"
         candidate = extract_bearer_token(auth_header)
         return self.key_store.verify_token(candidate)
@@ -284,6 +493,9 @@ class TrellisHTTPServer:
             if extra_headers:
                 hdrs.update(extra_headers)
             return status, hdrs, raw
+
+        if len(body) > self.max_body_bytes:
+            return _json_resp(413, {"error": "request body exceeds max_body_bytes"})
 
         if method == "GET" and clean_path == "/healthz":
             return _json_resp(
@@ -319,6 +531,26 @@ class TrellisHTTPServer:
                 )
             if method != "POST":
                 return _json_resp(405, {"error": f"Method not allowed on /admin/deploy: {method}"})
+
+            candidate = extract_bearer_token(auth_hdr) or ""
+            provided_sig = (norm_headers.get(_SIGNATURE_HEADER) or "").strip().lower()
+            if not provided_sig:
+                return _json_resp(
+                    400,
+                    {
+                        "error": "Missing X-Trellis-Signature header",
+                        "message": "Sign the .pyz bytes with HMAC-SHA256 using your admin Bearer token.",
+                    },
+                )
+            expected_sig = compute_hmac_signature(body, candidate)
+            if not hmac.compare_digest(expected_sig, provided_sig):
+                return _json_resp(
+                    403,
+                    {
+                        "error": "Invalid deploy signature",
+                        "message": "X-Trellis-Signature must be HMAC-SHA256(payload, admin_bearer_token).",
+                    },
+                )
             if not body or not zipfile.is_zipfile(io.BytesIO(body)):
                 return _json_resp(400, {"error": "Invalid .pyz bundle payload (must be a valid zipapp archive)."})
             with zipfile.ZipFile(io.BytesIO(body), "r") as zf:
@@ -392,23 +624,34 @@ class TrellisHTTPServer:
 
             return _json_resp(405, {"error": f"Method not allowed on {clean_path}: {method}"})
 
+        def _bundle_signature_headers(raw: bytes) -> dict[str, str]:
+            if not self.bundle_signing_key:
+                return {}
+            return {
+                "X-Trellis-Bundle-Signature": compute_hmac_signature(raw, self.bundle_signing_key)
+            }
+
         if method == "GET":
             if clean_path == "/bundle.json":
-                return _json_resp(200, build_remote_bundle(self.workspace_root))
+                raw = json.dumps(build_remote_bundle(self.workspace_root)).encode("utf-8")
+                headers = {
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Content-Length": str(len(raw)),
+                }
+                headers.update(_bundle_signature_headers(raw))
+                return 200, headers, raw
 
             if clean_path == "/install.sh":
                 host_hdr = norm_headers.get("host") or f"{self.host}:{self.port}"
-                scheme = norm_headers.get("x-forwarded-proto", "http")
+                scheme = norm_headers.get("x-forwarded-proto", self.scheme)
                 script = render_remote_install_script(f"{scheme}://{host_hdr}")
                 raw = script.encode("utf-8")
-                return (
-                    200,
-                    {
-                        "Content-Type": "text/x-shellscript; charset=utf-8",
-                        "Content-Length": str(len(raw)),
-                    },
-                    raw,
-                )
+                headers = {
+                    "Content-Type": "text/x-shellscript; charset=utf-8",
+                    "Content-Length": str(len(raw)),
+                }
+                headers.update(_bundle_signature_headers(raw))
+                return 200, headers, raw
 
             return _json_resp(404, {"error": f"Unknown GET endpoint: {clean_path}"})
 
@@ -464,12 +707,23 @@ class TrellisHTTPServer:
     def serve_forever(self) -> None:
         """Block and serve HTTP requests until interrupted."""
         print(
-            f"Trellis MCP HTTP Server v{__version__} listening on http://{self.host}:{self.port}/mcp "
+            f"Trellis MCP HTTP Server v{__version__} listening on {self.scheme}://{self.host}:{self.port}/mcp "
             "(Authorization: Bearer <API_KEY> required)"
         )
-        if self.auto_generated_admin_key:
-            print(f"[ADMIN KEY AUTO-GENERATED] Saved to {self.key_store.keys_file}")
-            print(f"  TRELLIS_API_KEY={self.api_key}")
+        if self.bundle_signing_key:
+            print("[trellis-mcp] Bundle signing enabled (X-Trellis-Bundle-Signature).")
+        if self.auto_generated_admin_key and self.api_key:
+            print(
+                "[ADMIN KEY AUTO-GENERATED] The raw key is shown ONCE on stderr below; "
+                f"only its salted hash is stored in {self.key_store.keys_file}.",
+                file=sys.stderr,
+            )
+            print(
+                "[ADMIN KEY AUTO-GENERATED] Store it in your secret manager now; "
+                "it cannot be recovered from disk.",
+                file=sys.stderr,
+            )
+            print(f"  TRELLIS_API_KEY={self.api_key}", file=sys.stderr)
         try:
             self._httpd.serve_forever()
         except KeyboardInterrupt:
