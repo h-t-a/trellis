@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `trellis_scan` MCP tool for secret/PAN scanning with optional `pip-audit` integration.
 - `trellis_classify` MCP tool implementing the Public/Internal/Confidential/Restricted AI prompt gate.
 - `trellis_mcp_registry` MCP tool enforcing the approved MCP server allowlist.
+- `trellis_verify` MCP tool for SHA-256/HMAC provenance verification of retrieved standards.
+- `trellis_analytics` MCP tool for token/cost/quota reporting from a local usage ledger.
+- `--emit-config` bridge generating MCP config for VS Code, JetBrains, Cursor, Windsurf, and Claude.
+- Versioned standards manifest (`docs/standards/standards.json`) with offline cache (`--sync-cache`).
+- Admin key-management dashboard at `GET /admin/dashboard`.
 - `docs/standards/approved-mcp-servers.json` and `docs/standards/data-classification.md` (draft).
 - Workspace doctor checks for JSON validity, skill mirror parity, broken relative links, and `--dry-run` previews.
 - `/readyz` readiness endpoint and admin-only `/metrics` endpoint with per-key usage counters.

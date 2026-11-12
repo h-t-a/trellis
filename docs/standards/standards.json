@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "updated": "2026-11-12",
+  "standards": {
+    "testing-standard": {
+      "version": "0.1",
+      "path": "docs/standards/testing-standard.md",
+      "versions": {
+        "0.1": "docs/standards/testing-standard.md"
+      }
+    },
+    "performance-sla": {
+      "version": "0.1",
+      "path": "docs/standards/performance-sla.md",
+      "versions": {
+        "0.1": "docs/standards/performance-sla.md"
+      }
+    },
+    "definition-of-done": {
+      "version": "0.1",
+      "path": "docs/standards/definition-of-done.md",
+      "versions": {
+        "0.1": "docs/standards/definition-of-done.md"
+      }
+    },
+    "ai-boundary": {
+      "version": "0.1",
+      "path": "docs/standards/ai-boundary.md",
+      "versions": {
+        "0.1": "docs/standards/ai-boundary.md"
+      }
+    },
+    "security-baseline": {
+      "version": "0.1",
+      "path": "docs/standards/security-baseline.md",
+      "versions": {
+        "0.1": "docs/standards/security-baseline.md"
+      }
+    },
+    "git-convention": {
+      "version": "0.1",
+      "path": "docs/standards/git-convention.md",
+      "versions": {
+        "0.1": "docs/standards/git-convention.md"
+      }
+    },
+    "rca-playbook": {
+      "version": "0.1",
+      "path": "docs/standards/rca-playbook.md",
+      "versions": {
+        "0.1": "docs/standards/rca-playbook.md"
+      }
+    },
+    "quota-efficiency": {
+      "version": "0.1",
+      "path": "docs/standards/quota-efficiency.md",
+      "versions": {
+        "0.1": "docs/standards/quota-efficiency.md"
+      }
+    },
+    "complexity-and-performance": {
+      "version": "0.1",
+      "path": "docs/standards/complexity-and-performance.md",
+      "versions": {
+        "0.1": "docs/standards/complexity-and-performance.md"
+      }
+    },
+    "spec-template": {
+      "version": "0.1",
+      "path": "templates/spec-template.md",
+      "versions": {
+        "0.1": "templates/spec-template.md"
+      }
+    },
+    "implementation-plan": {
+      "version": "0.1",
+      "path": "templates/implementation-plan.md",
+      "versions": {
+        "0.1": "templates/implementation-plan.md"
+      }
+    },
+    "walkthrough": {
+      "version": "0.1",
+      "path": "templates/walkthrough.md",
+      "versions": {
+        "0.1": "templates/walkthrough.md"
+      }
+    }
+  }
+}

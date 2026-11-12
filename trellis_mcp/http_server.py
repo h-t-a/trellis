@@ -10,6 +10,7 @@ Exposes:
 - `GET    /admin/keys`       -> Admin-only list of issued user/team API keys (`[REQ-MCP-08]`)
 - `POST   /admin/keys`       -> Admin-only auto-generation of a new user/team API key (`[REQ-MCP-08]`)
 - `DELETE /admin/keys/<id>`  -> Admin-only immediate key revocation (`[REQ-MCP-08]`)
+- `GET    /admin/dashboard`  -> Unauthenticated HTML shell for the admin key-management dashboard (`[REQ-P3-02]`)
 """
 
 from __future__ import annotations
@@ -49,6 +50,83 @@ DEFAULT_RATE_WINDOW_SEC = 60.0
 DEFAULT_REQUEST_TIMEOUT_SEC = 15.0
 _SIGNATURE_HEADER = "x-trellis-signature"
 _BUNDLE_SIGNATURE_HEADER = "x-trellis-bundle-signature"
+
+DASHBOARD_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trellis Key Dashboard</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:2rem;max-width:60rem}
+input,select,button{padding:.4rem .55rem;margin:.2rem;font:inherit}
+pre{background:#111;color:#cde;padding:1rem;border-radius:.4rem;overflow:auto;min-height:6rem}
+fieldset{margin:1rem 0;padding:.75rem;border:1px solid #bbb;border-radius:.4rem}
+label{display:inline-block;min-width:5rem}
+</style>
+</head>
+<body>
+<h1>Trellis Key Dashboard</h1>
+<p>Admin-only. The key is held in <code>sessionStorage</code> for this tab and is never sent to the page HTML.</p>
+<fieldset>
+  <legend>Admin API key</legend>
+  <input id="key" type="password" size="42" placeholder="Bearer token">
+  <button id="save">Use key</button>
+  <button id="clear">Forget</button>
+</fieldset>
+<fieldset>
+  <legend>Keys</legend>
+  <button id="list">List keys</button>
+  <div>
+    <label for="label">Label</label><input id="label" placeholder="team-ibanking">
+    <label for="role">Role</label><select id="role"><option>member</option><option>admin</option></select>
+    <button id="generate">Generate</button>
+  </div>
+  <div>
+    <label for="target">Revoke</label><input id="target" placeholder="key id or label">
+    <button id="revoke">Revoke</button>
+  </div>
+</fieldset>
+<pre id="out">Ready.</pre>
+<script>
+const storeKey = "trellisAdminKey";
+const keyInput = document.getElementById("key");
+const out = document.getElementById("out");
+keyInput.value = sessionStorage.getItem(storeKey) || "";
+function show(data){ out.textContent = JSON.stringify(data, null, 2); }
+function headers(){
+  const key = keyInput.value.trim();
+  if(!key){ throw new Error("Enter an admin API key first."); }
+  return {"Authorization": "Bearer " + key, "Content-Type": "application/json"};
+}
+async function call(method, url, body){
+  try {
+    const resp = await fetch(url, {method, headers: headers(), body: body ? JSON.stringify(body) : undefined});
+    const text = await resp.text();
+    let data; try { data = JSON.parse(text); } catch { data = {status: resp.status, body: text}; }
+    show({status: resp.status, data});
+  } catch (err) { show({error: String(err.message || err)}); }
+}
+document.getElementById("save").onclick = () => {
+  sessionStorage.setItem(storeKey, keyInput.value.trim());
+  show({saved: true});
+};
+document.getElementById("clear").onclick = () => {
+  sessionStorage.removeItem(storeKey); keyInput.value = ""; show({cleared: true});
+};
+document.getElementById("list").onclick = () => call("GET", "/admin/keys");
+document.getElementById("generate").onclick = () => call("POST", "/admin/keys", {
+  label: document.getElementById("label").value || "team", role: document.getElementById("role").value
+});
+document.getElementById("revoke").onclick = () => {
+  const target = document.getElementById("target").value.trim();
+  if(target){ call("DELETE", "/admin/keys/" + encodeURIComponent(target)); }
+  else { show({error: "Enter a key id or label to revoke."}); }
+};
+</script>
+</body>
+</html>
+"""
 
 
 def compute_hmac_signature(payload: bytes, key: str) -> str:
@@ -613,6 +691,22 @@ class TrellisHTTPServer:
                     "max_body_bytes": self.max_body_bytes,
                     "rate_limit": self.rate_limit,
                 },
+            )
+
+        if method == "GET" and clean_path in ("/admin", "/admin/dashboard"):
+            raw = DASHBOARD_HTML.encode("utf-8")
+            return (
+                200,
+                {
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Length": str(len(raw)),
+                    "Cache-Control": "no-store",
+                    "Content-Security-Policy": (
+                        "default-src 'none'; script-src 'unsafe-inline'; "
+                        "style-src 'unsafe-inline'; connect-src 'self'"
+                    ),
+                },
+                raw,
             )
 
         auth_hdr = norm_headers.get("authorization")

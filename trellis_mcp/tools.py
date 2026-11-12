@@ -7,13 +7,16 @@ Each tool returns a standard MCP CallToolResult dictionary:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -149,44 +152,390 @@ def list_bundled_skills(workspace_root: Path | None = None) -> dict[str, str]:
 
 
 def _resolve_root(workspace_root: Path | None) -> Path:
-    if workspace_root and (workspace_root / "docs" / "standards").exists():
+    if workspace_root:
         return workspace_root
     return PACKAGE_ROOT
+
+
+STANDARDS_MANIFEST = "docs/standards/standards.json"
+DEFAULT_STANDARD_VERSION = "0.1"
+CACHE_DIRNAME = ".trellis_cache"
+
+
+def _standard_manifest(root: Path) -> dict[str, dict[str, Any]]:
+    """Load `docs/standards/standards.json`, falling back to the built-in map."""
+    data: dict[str, Any] = {}
+    raw: str | None = None
+    if root.is_dir():
+        candidate = root / STANDARDS_MANIFEST
+        if candidate.is_file():
+            try:
+                raw = candidate.read_text(encoding="utf-8")
+            except OSError:
+                raw = None
+    else:
+        raw = read_bundled_text(STANDARDS_MANIFEST, workspace_root=root)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                data = parsed
+        except (ValueError, TypeError):
+            data = {}
+
+    standards = data.get("standards")
+    if isinstance(standards, dict) and standards:
+        return {str(name): entry for name, entry in standards.items() if isinstance(entry, dict)}
+
+    return {
+        name: {
+            "version": DEFAULT_STANDARD_VERSION,
+            "path": rel_path,
+            "versions": {DEFAULT_STANDARD_VERSION: rel_path},
+        }
+        for name, rel_path in STANDARD_FILE_MAP.items()
+    }
+
+
+def _standard_cache_dir(root: Path) -> Path:
+    base = root.parent if root.is_file() else root
+    return base / CACHE_DIRNAME / "standards"
+
+
+def _standard_signing_key(explicit: str | None = None) -> str | None:
+    return (
+        explicit
+        or os.environ.get("TRELLIS_STANDARD_SIGNING_KEY")
+        or os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY")
+        or None
+    )
+
+
+def _sign_text(text: str, key: str | None) -> str | None:
+    if not key:
+        return None
+    return hmac.new(key.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _write_standard_cache(cache_path: Path, content: str, digest: str) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(content, encoding="utf-8")
+        cache_path.with_suffix(".sha256").write_text(digest + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_standard(
+    name: str,
+    root: Path,
+    version: str | None = None,
+    offline: bool = False,
+) -> dict[str, Any]:
+    """Resolve a standard by name/version, preferring disk/bundle then the offline cache."""
+    manifest = _standard_manifest(root)
+    entry = manifest.get(name)
+    if not entry:
+        raise KeyError(
+            f"Unknown standard '{name}'. Available: {', '.join(sorted(manifest.keys()))}"
+        )
+
+    resolved_version = str(version).strip() if version else str(
+        entry.get("version") or DEFAULT_STANDARD_VERSION
+    )
+    versions = entry.get("versions") if isinstance(entry.get("versions"), dict) else {}
+    rel_path = versions.get(resolved_version)
+    if rel_path is None and resolved_version == str(entry.get("version")):
+        rel_path = entry.get("path")
+    if not rel_path:
+        available = ", ".join(sorted(versions.keys())) or str(entry.get("version"))
+        raise ValueError(
+            f"Version '{resolved_version}' not available for '{name}'. Available: {available}"
+        )
+
+    cache_path = _standard_cache_dir(root) / f"{name}@{resolved_version}.md"
+    content: str | None = None
+    source = "bundled"
+
+    if offline:
+        if cache_path.is_file():
+            content = cache_path.read_text(encoding="utf-8")
+            source = "cache"
+        else:
+            raise FileNotFoundError(
+                f"No offline cache for '{name}' version '{resolved_version}'. Run --sync-cache first."
+            )
+    else:
+        content = read_bundled_text(str(rel_path), workspace_root=root)
+        if content is None:
+            if cache_path.is_file():
+                content = cache_path.read_text(encoding="utf-8")
+                source = "cache"
+            else:
+                raise FileNotFoundError(f"Standard file not found: {rel_path}")
+
+    if content is None:
+        raise FileNotFoundError(f"Standard file not found: {rel_path}")
+
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    sidecar = cache_path.with_suffix(".sha256")
+    if source == "cache" and sidecar.is_file():
+        try:
+            expected_digest = sidecar.read_text(encoding="utf-8").strip()
+        except OSError:
+            expected_digest = ""
+        if expected_digest and not hmac.compare_digest(expected_digest, digest):
+            raise ValueError(
+                f"Offline cache integrity check failed for '{name}' version '{resolved_version}'."
+            )
+    if not offline:
+        _write_standard_cache(cache_path, content, digest)
+
+    return {
+        "content": content,
+        "path": str(rel_path),
+        "version": resolved_version,
+        "source": source,
+        "sha256": digest,
+    }
+
+
+def _standard_metadata(
+    name: str, loaded: dict[str, Any], signing_key: str | None = None
+) -> dict[str, Any]:
+    signature = _sign_text(loaded["content"], _standard_signing_key(signing_key))
+    return {
+        "name": name,
+        "version": loaded["version"],
+        "path": loaded["path"],
+        "source": loaded["source"],
+        "sha256": loaded["sha256"],
+        "signed": signature is not None,
+        "signature_alg": "HMAC-SHA256" if signature else None,
+        "signature": signature,
+    }
 
 
 def tool_trellis_get_standard(
     args: dict[str, Any], workspace_root: Path | None = None
 ) -> dict[str, Any]:
-    """Return the authoritative Trellis standard or template by name."""
+    """Return the authoritative Trellis standard or template by name and optional version."""
     name = str(args.get("name", "all")).strip().lower()
+    version = args.get("version")
+    offline = bool(args.get("offline", False))
     root = _resolve_root(workspace_root)
+    manifest = _standard_manifest(root)
 
     if name in ("all", "list", ""):
         lines = ["# Available Trellis Standards & Templates", ""]
-        for key, rel_path in STANDARD_FILE_MAP.items():
-            lines.append(f"- `{key}` -> `{rel_path}`")
+        for key in sorted(manifest.keys()):
+            entry = manifest[key]
+            versions = entry.get("versions") if isinstance(entry.get("versions"), dict) else {}
+            available = ", ".join(sorted(versions.keys())) or str(entry.get("version"))
+            lines.append(
+                f"- `{key}` v{entry.get('version')} (available: {available}) -> `{entry.get('path')}`"
+            )
+        lines.extend(
+            [
+                "",
+                "Tip: request a historical version with "
+                '`{"name": "<standard>", "version": "<x.y>"}`.',
+            ]
+        )
         return _ok("\n".join(lines))
 
-    rel_path = STANDARD_FILE_MAP.get(name)
-    if not rel_path:
+    if name not in manifest:
         return _err(
-            f"Unknown standard '{name}'. Available: {', '.join(sorted(STANDARD_FILE_MAP.keys()))}"
+            f"Unknown standard '{name}'. Available: {', '.join(sorted(manifest.keys()))}"
         )
 
-    content = read_bundled_text(rel_path, workspace_root=root)
-    if content is not None:
-        return _ok(content)
-    target = root / rel_path
-    if not target.exists():
-        target = PACKAGE_ROOT / rel_path
-    if not target.exists():
-        return _err(f"Standard file not found on disk: {rel_path}")
+    try:
+        loaded = _load_standard(name, root, version=str(version) if version else None, offline=offline)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        return _err(str(exc))
 
-    content = read_bundled_text(rel_path, workspace_root=root)
-    if content is None:
-        return _err(f"Standard file not found on disk: {rel_path}")
+    result = _ok(loaded["content"])
+    result["metadata"] = _standard_metadata(name, loaded)
+    return result
 
-    return _ok(content)
+
+def tool_trellis_verify(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Verify the SHA-256 hash and optional HMAC signature of a retrieved standard ([REQ-P3-05])."""
+    name = str(args.get("name", "")).strip().lower()
+    if not name:
+        return _err("Provide the standard 'name' to verify.")
+    root = _resolve_root(workspace_root)
+    version = args.get("version")
+    signing_key = args.get("signing_key")
+
+    try:
+        loaded = _load_standard(name, root, version=str(version) if version else None)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        return _err(str(exc))
+
+    expected_sha = str(args.get("expected_sha256", "")).strip().lower() or None
+    expected_sig = str(args.get("expected_signature", "")).strip().lower() or None
+    actual_sig = _sign_text(loaded["content"], _standard_signing_key(signing_key))
+    checks: list[str] = []
+    ok = True
+
+    if expected_sha:
+        match = hmac.compare_digest(expected_sha, loaded["sha256"])
+        ok = ok and match
+        checks.append(f"sha256: {'MATCH' if match else 'MISMATCH'}")
+    if expected_sig:
+        if actual_sig is None:
+            ok = False
+            checks.append("signature: NO SIGNING KEY CONFIGURED")
+        else:
+            match = hmac.compare_digest(expected_sig, actual_sig)
+            ok = ok and match
+            checks.append(f"signature: {'MATCH' if match else 'MISMATCH'}")
+    if not expected_sha and not expected_sig:
+        checks.append("No expected hash/signature supplied; reporting computed provenance only.")
+
+    status = "VALID" if ok else "INVALID"
+    if not expected_sha and not expected_sig:
+        status = "HASHED"
+
+    lines = [
+        f"# Trellis Provenance Verification: {name}",
+        "",
+        f"- Status: **{status}**",
+        f"- Version: `{loaded['version']}`",
+        f"- Source: `{loaded['source']}`",
+        f"- SHA-256: `{loaded['sha256']}`",
+        f"- Signed: `{bool(actual_sig)}`"
+        + (f" (`HMAC-SHA256: {actual_sig}`)" if actual_sig else ""),
+        "",
+        "## Checks",
+        *[f"- {item}" for item in checks],
+    ]
+    result = _ok("\n".join(lines))
+    result["metadata"] = {
+        "name": name,
+        "version": loaded["version"],
+        "sha256": loaded["sha256"],
+        "signature": actual_sig,
+        "valid": ok,
+        "status": status,
+    }
+    if status == "INVALID":
+        result["isError"] = True
+    return result
+
+
+def tool_trellis_analytics(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Report token usage, cost, and quota utilization from a local usage ledger ([REQ-P3-04])."""
+    root = _resolve_root(workspace_root)
+    base = root.parent if root.is_file() else root
+    usage_arg = args.get("usage_file")
+    usage_path = (base / str(usage_arg)).resolve() if usage_arg else base / ".trellis_usage.json"
+    budget = int(args.get("budget_tokens") or 0)
+    rate = float(args.get("cost_per_1k_tokens") or 0.0)
+    period_days = args.get("period_days")
+
+    entries: list[dict[str, Any]] = []
+    if usage_path.is_file():
+        try:
+            raw = json.loads(usage_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                raw = raw.get("entries", [])
+            if isinstance(raw, list):
+                entries = [e for e in raw if isinstance(e, dict)]
+        except (OSError, ValueError):
+            return _err(f"Could not parse usage ledger: {usage_path.name}")
+
+    cutoff: datetime | None = None
+    if period_days:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=float(period_days))
+
+    per_key: dict[str, dict[str, Any]] = {}
+    per_tool: dict[str, int] = {}
+    total_in = total_out = 0
+    total_cost = 0.0
+
+    for entry in entries:
+        if cutoff is not None:
+            stamp = entry.get("timestamp")
+            try:
+                parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        tokens_in = int(entry.get("input_tokens") or 0)
+        tokens_out = int(entry.get("output_tokens") or 0)
+        tool = str(entry.get("tool") or "unknown")
+        label = str(entry.get("label") or entry.get("key_id") or "unattributed")
+        cost = entry.get("cost_usd")
+        if cost is None:
+            cost = ((tokens_in + tokens_out) / 1000.0) * rate
+        cost = float(cost)
+
+        total_in += tokens_in
+        total_out += tokens_out
+        total_cost += cost
+        bucket = per_key.setdefault(
+            label, {"requests": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        )
+        bucket["requests"] += 1
+        bucket["input_tokens"] += tokens_in
+        bucket["output_tokens"] += tokens_out
+        bucket["cost_usd"] += cost
+        per_tool[tool] = per_tool.get(tool, 0) + 1
+
+    used = total_in + total_out
+    utilization = (used / budget * 100.0) if budget > 0 else None
+    if budget and used >= budget:
+        verdict = "EXCEEDED"
+    elif utilization is not None and utilization >= 80.0:
+        verdict = "WARN"
+    else:
+        verdict = "OK"
+    if not usage_path.is_file():
+        verdict = "NO_DATA"
+
+    lines = [
+        "# Trellis Cost & Quota Analytics",
+        "",
+        f"- Ledger: `{usage_path}` ({'found' if usage_path.is_file() else 'missing'})",
+        f"- Entries: {len(entries)}",
+        f"- Total tokens: {used} (input {total_in} / output {total_out})",
+        f"- Estimated cost: ${total_cost:.4f}"
+        + (f" (@ ${rate:.4f}/1K tokens)" if rate else ""),
+        f"- Budget utilization: {f'{utilization:.1f}%' if utilization is not None else 'not configured'}",
+        f"- Verdict: **{verdict}**",
+    ]
+    if per_key:
+        lines.extend(["", "## Per Key / Team"])
+        for label, bucket in sorted(per_key.items()):
+            lines.append(
+                f"- `{label}`: {bucket['requests']} requests, "
+                f"{bucket['input_tokens'] + bucket['output_tokens']} tokens, "
+                f"${bucket['cost_usd']:.4f}"
+            )
+    if per_tool:
+        lines.extend(["", "## Per Tool"])
+        for tool, count in sorted(per_tool.items()):
+            lines.append(f"- `{tool}`: {count}")
+
+    result = _ok("\n".join(lines))
+    result["metadata"] = {
+        "entries": len(entries),
+        "total_tokens": used,
+        "cost_usd": round(total_cost, 6),
+        "budget_tokens": budget,
+        "utilization_pct": round(utilization, 2) if utilization is not None else None,
+        "verdict": verdict,
+    }
+    return result
 
 
 def _is_placeholder_value(value: str) -> bool:
@@ -1238,14 +1587,22 @@ def tool_trellis_mcp_registry(
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "trellis_get_standard",
-        "description": "Retrieve an authoritative Trellis engineering standard or template (e.g., testing-standard, rca-playbook, quota-efficiency, complexity-and-performance, security-baseline, ai-boundary, git-convention, definition-of-done, performance-sla, spec-template).",
+        "description": "Retrieve an authoritative Trellis engineering standard or template (e.g., testing-standard, rca-playbook, quota-efficiency, complexity-and-performance, security-baseline, ai-boundary, git-convention, definition-of-done, performance-sla, spec-template) with SHA-256/HMAC provenance metadata.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Standard or template name (or 'all' to list all available standards).",
-                }
+                    "description": "Standard or template name (or 'all' to list all available standards and versions).",
+                },
+                "version": {
+                    "type": "string",
+                    "description": "Optional historical version, e.g., '0.1'. Defaults to the current version.",
+                },
+                "offline": {
+                    "type": "boolean",
+                    "description": "If true, resolve from the local .trellis_cache/standards offline cache only.",
+                },
             },
             "required": ["name"],
         },
@@ -1422,6 +1779,34 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "config_paths": {"type": "array", "items": {"type": "string"}, "description": "Workspace-relative MCP config files to check."},
                 "approved_servers": {"type": "array", "items": {"type": "string"}, "description": "Override allowlist (defaults to docs/standards/approved-mcp-servers.json or trellis-mcp)."},
                 "strict": {"type": "boolean", "description": "If true (default), unapproved servers fail the audit."},
+            },
+        },
+    },
+    {
+        "name": "trellis_verify",
+        "description": "Verify a standard's SHA-256 hash and optional HMAC-SHA256 provenance signature to defend against tampered or injected standards.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Standard or template name to verify."},
+                "version": {"type": "string", "description": "Optional version to verify (defaults to current)."},
+                "expected_sha256": {"type": "string", "description": "Expected SHA-256 hex digest."},
+                "expected_signature": {"type": "string", "description": "Expected HMAC-SHA256 hex signature."},
+                "signing_key": {"type": "string", "description": "Optional HMAC key; defaults to TRELLIS_STANDARD_SIGNING_KEY or TRELLIS_BUNDLE_SIGNING_KEY."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "trellis_analytics",
+        "description": "Report token usage, estimated cost, and quota utilization from a local usage ledger (.trellis_usage.json) instead of advisory-only quota rules.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "usage_file": {"type": "string", "description": "Workspace-relative usage ledger path (default .trellis_usage.json)."},
+                "budget_tokens": {"type": "integer", "description": "Token budget for quota utilization (optional)."},
+                "cost_per_1k_tokens": {"type": "number", "description": "Cost per 1,000 tokens when entries omit cost_usd."},
+                "period_days": {"type": "number", "description": "Only include entries from the last N days."},
             },
         },
     },

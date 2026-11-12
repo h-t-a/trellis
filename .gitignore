@@ -29,4 +29,6 @@ NOTICE.md
 NOTICE
 *.notice.md
 .trellis_keys.json
+.trellis_cache/
+.trellis_usage.json
 

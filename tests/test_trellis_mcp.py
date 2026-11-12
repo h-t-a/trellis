@@ -2,7 +2,7 @@
 
 Verifies requirements:
 - [REQ-MCP-01]: Zero-dependency Python MCP JSON-RPC 2.0 server over stdio
-- [REQ-MCP-02]: 12 callable MCP tools with P0/P1 safety, cost, and data-classification guards (F02, F03, F04, F10, F12)
+- [REQ-MCP-02]: 14 callable MCP tools with P0/P1 safety, cost, and data-classification guards (F02, F03, F04, F10, F12)
 - [REQ-MCP-03]: Cross-device workspace sync & global device installer
 - [REQ-MCP-04]: Requirement-linked automated verification
 """
@@ -13,17 +13,22 @@ import hashlib
 import hmac
 import io
 import json
+import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
+from trellis_mcp.editors import render_editor_config, write_editor_config
 from trellis_mcp.http_server import TrellisHTTPServer
 from trellis_mcp.installer import install_global, install_remote, sync_workspace
 from trellis_mcp.server import TrellisMCPServer
 from trellis_mcp.tools import (
+    tool_trellis_analytics,
     tool_trellis_budget,
     tool_trellis_classify,
     tool_trellis_doctor,
@@ -36,6 +41,7 @@ from trellis_mcp.tools import (
     tool_trellis_scan,
     tool_trellis_spec,
     tool_trellis_test,
+    tool_trellis_verify,
 )
 
 
@@ -83,6 +89,8 @@ class TestTrellisMCPServer(unittest.TestCase):
             "trellis_scan",
             "trellis_classify",
             "trellis_mcp_registry",
+            "trellis_verify",
+            "trellis_analytics",
         }
         self.assertEqual(tool_names, expected_tools)
 
@@ -844,6 +852,210 @@ class TestTrellisMCPServer(unittest.TestCase):
             self.assertIn("Fixed YAML frontmatter", applied["content"][0]["text"])
             self.assertTrue(rule.read_text(encoding="utf-8").startswith("---\n"))
             self.assertIn("Invalid JSON", applied["content"][0]["text"])
+
+    def test_req_p3_01_editor_config_bridge(self) -> None:
+        """[REQ-P3-01] Verify MCP config generation for VS Code, JetBrains, Cursor, Windsurf, and Claude."""
+        vscode = render_editor_config("vscode")
+        self.assertEqual(vscode["servers"]["trellis-mcp"]["type"], "stdio")
+        self.assertEqual(vscode["servers"]["trellis-mcp"]["args"], ["-m", "trellis_mcp"])
+
+        jetbrains = render_editor_config("jetbrains")
+        self.assertIn("mcpServers", jetbrains)
+        self.assertEqual(jetbrains["mcpServers"]["trellis-mcp"]["command"], "python")
+
+        remote = render_editor_config("vscode", remote_url="https://vm.example.internal:8443")
+        entry = remote["servers"]["trellis-mcp"]
+        self.assertEqual(entry["type"], "http")
+        self.assertEqual(entry["url"], "https://vm.example.internal:8443/mcp")
+        self.assertIn("${env:TRELLIS_API_KEY}", entry["headers"]["Authorization"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = write_editor_config("vscode", root)
+            self.assertEqual(target, root / ".vscode" / "mcp.json")
+            self.assertEqual(
+                json.loads(target.read_text(encoding="utf-8"))["servers"]["trellis-mcp"]["type"],
+                "stdio",
+            )
+
+        with self.assertRaises(ValueError):
+            render_editor_config("emacs")
+
+        from trellis_mcp.__main__ import main
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = main(["--emit-config", "cursor"])
+        self.assertEqual(code, 0)
+        self.assertIn("mcpServers", json.loads(buffer.getvalue()))
+
+    def test_req_p3_02_admin_dashboard_shell(self) -> None:
+        """[REQ-P3-02] Verify the admin key-management dashboard HTML shell is served without secrets."""
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key="dashboard-test-key",
+            workspace_root=self.repo_root,
+        ) as http_srv:
+            req = Request(f"{http_srv.base_url}/admin/dashboard", method="GET")
+            with http_srv.open_request(req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+                body = resp.read().decode("utf-8")
+                self.assertIn("Trellis Key Dashboard", body)
+                self.assertIn("/admin/keys", body)
+                self.assertNotIn("dashboard-test-key", body)
+
+    def test_req_p3_03_versioned_standards_and_offline_cache(self) -> None:
+        """[REQ-P3-03] Verify version selection, manifest listing, and offline cache fallback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            standards_dir = root / "docs" / "standards"
+            versions_dir = standards_dir / "versions" / "demo"
+            versions_dir.mkdir(parents=True)
+            (standards_dir / "demo.md").write_text("# Demo v0.2\n", encoding="utf-8")
+            (versions_dir / "0.1.md").write_text("# Demo v0.1\n", encoding="utf-8")
+            (standards_dir / "standards.json").write_text(
+                json.dumps(
+                    {
+                        "standards": {
+                            "demo": {
+                                "version": "0.2",
+                                "path": "docs/standards/demo.md",
+                                "versions": {
+                                    "0.1": "docs/standards/versions/demo/0.1.md",
+                                    "0.2": "docs/standards/demo.md",
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            current = tool_trellis_get_standard({"name": "demo"}, workspace_root=root)
+            self.assertIn("Demo v0.2", current["content"][0]["text"])
+            self.assertEqual(current["metadata"]["version"], "0.2")
+            self.assertEqual(len(current["metadata"]["sha256"]), 64)
+
+            old = tool_trellis_get_standard(
+                {"name": "demo", "version": "0.1"}, workspace_root=root
+            )
+            self.assertIn("Demo v0.1", old["content"][0]["text"])
+
+            missing = tool_trellis_get_standard(
+                {"name": "demo", "version": "9.9"}, workspace_root=root
+            )
+            self.assertTrue(missing["isError"])
+
+            listing = tool_trellis_get_standard({"name": "all"}, workspace_root=root)
+            self.assertIn("`demo` v0.2", listing["content"][0]["text"])
+
+            cache_file = root / ".trellis_cache" / "standards" / "demo@0.2.md"
+            self.assertTrue(cache_file.is_file())
+            (standards_dir / "demo.md").unlink()
+            offline = tool_trellis_get_standard(
+                {"name": "demo", "offline": True}, workspace_root=root
+            )
+            self.assertIn("Demo v0.2", offline["content"][0]["text"])
+            self.assertEqual(offline["metadata"]["source"], "cache")
+
+            cache_file.write_text("# Tampered v0.2\n", encoding="utf-8")
+            tampered = tool_trellis_get_standard(
+                {"name": "demo", "offline": True}, workspace_root=root
+            )
+            self.assertTrue(tampered["isError"])
+            self.assertIn("integrity", tampered["content"][0]["text"])
+
+    def test_req_p3_04_cost_quota_analytics(self) -> None:
+        """[REQ-P3-04] Verify usage ledger aggregation, cost estimation, and quota verdicts."""
+        ledger = [
+            {
+                "timestamp": "2026-11-12T00:00:00Z",
+                "label": "team-a",
+                "tool": "trellis_rca",
+                "input_tokens": 1000,
+                "output_tokens": 500,
+            },
+            {
+                "timestamp": "2026-11-12T01:00:00Z",
+                "label": "team-b",
+                "tool": "trellis_spec",
+                "input_tokens": 2000,
+                "output_tokens": 1000,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".trellis_usage.json").write_text(
+                json.dumps({"entries": ledger}), encoding="utf-8"
+            )
+            report = tool_trellis_analytics(
+                {"budget_tokens": 4000, "cost_per_1k_tokens": 2.0},
+                workspace_root=root,
+            )
+            self.assertFalse(report.get("isError", False))
+            meta = report["metadata"]
+            self.assertEqual(meta["total_tokens"], 4500)
+            self.assertAlmostEqual(meta["cost_usd"], 9.0, places=4)
+            self.assertEqual(meta["verdict"], "EXCEEDED")
+            text = report["content"][0]["text"]
+            self.assertIn("team-a", text)
+            self.assertIn("team-b", text)
+
+        with tempfile.TemporaryDirectory() as empty:
+            no_data = tool_trellis_analytics({}, workspace_root=Path(empty))
+            self.assertEqual(no_data["metadata"]["verdict"], "NO_DATA")
+
+    def test_req_p3_05_standard_provenance_and_verify(self) -> None:
+        """[REQ-P3-05] Verify SHA-256/HMAC provenance metadata and trellis_verify tamper detection."""
+        fetched = tool_trellis_get_standard(
+            {"name": "testing-standard"}, workspace_root=self.repo_root
+        )
+        meta = fetched["metadata"]
+        self.assertEqual(len(meta["sha256"]), 64)
+        self.assertFalse(meta["signed"])
+
+        valid = tool_trellis_verify(
+            {"name": "testing-standard", "expected_sha256": meta["sha256"]},
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(valid["metadata"]["status"], "VALID")
+        self.assertTrue(valid["metadata"]["valid"])
+
+        tampered = tool_trellis_verify(
+            {"name": "testing-standard", "expected_sha256": "0" * 64},
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(tampered["metadata"]["status"], "INVALID")
+        self.assertTrue(tampered["isError"])
+
+        with patch.dict(os.environ, {"TRELLIS_STANDARD_SIGNING_KEY": "unit-test-key"}):
+            signed = tool_trellis_get_standard(
+                {"name": "testing-standard"}, workspace_root=self.repo_root
+            )
+            signed_meta = signed["metadata"]
+            self.assertTrue(signed_meta["signed"])
+            self.assertEqual(len(signed_meta["signature"]), 64)
+
+            signed_ok = tool_trellis_verify(
+                {
+                    "name": "testing-standard",
+                    "expected_sha256": signed_meta["sha256"],
+                    "expected_signature": signed_meta["signature"],
+                },
+                workspace_root=self.repo_root,
+            )
+            self.assertEqual(signed_ok["metadata"]["status"], "VALID")
+
+            signed_bad = tool_trellis_verify(
+                {
+                    "name": "testing-standard",
+                    "expected_signature": "f" * 64,
+                },
+                workspace_root=self.repo_root,
+            )
+            self.assertEqual(signed_bad["metadata"]["status"], "INVALID")
 
 
 if __name__ == "__main__":
