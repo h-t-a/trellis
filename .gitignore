@@ -31,4 +31,5 @@ NOTICE
 .trellis_keys.json
 .trellis_cache/
 .trellis_usage.json
+.trellis-audit.jsonl
 

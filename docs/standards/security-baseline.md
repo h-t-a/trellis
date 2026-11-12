@@ -30,10 +30,8 @@ Every repository and developer workstation adopting this playbook must enforce t
 
 ---
 
-## 2. Additional Security Details to Research `[TO RESEARCH]`
+## 2. Runtime Hardening, Scanning & Browser Controls (`[REQ-TRL-01]..[REQ-TRL-07]`)
 
-Per the project roadmap (Section 9 of [trellis-project-export.md](../knowledge/trellis-project-export.md)), the following areas require deeper specification:
-
-- `TODO [TO RESEARCH]`: SAST, dependency vulnerability scanning, and DAST tool selection and severity thresholds in CI.
-- `TODO [TO RESEARCH]`: Standard allow/deny permission lists for `.claude/settings.json` and Antigravity `/permissions` across banking project archetypes.
-- `TODO [TO RESEARCH]`: Approved browser allowlist/denylist domains for Antigravity IDE browser automation.
+1. **HTTP / MCP Origin & Lockout Hardening:** Default local server bind is `127.0.0.1` (`--host 0.0.0.0` explicit for VM/LAN), `Origin` allowlist enforced on `/mcp` and `/admin/*` (`403`), and repeated `401` failures trigger temporary `429` lockout (`[REQ-TRL-01]`, `[REQ-TRL-03]`).
+2. **SAST, Secret & Redaction Scanning Baseline:** `.claude/hooks/secret-scan.sh`, `.claude/hooks/validate-bash.sh`, and `.claude/settings.json` enforce local secret/exfiltration denials (`[REQ-TRL-07]`). `trellis_scan` / `trellis_rca` run Luhn PAN, JWT, Myanmar NRC, regional phone, and IBAN checks (`[REQ-TRL-05]`).
+3. **Banking Archetype Permission Baseline & Browser Controls:** Standard deny rules forbid reading `.env*`, `.trellis_keys.json`, `~/.ssh/*`, `~/.aws/*` and outbound exfiltration (`scp`, `nc`, `curl -d`, `wget --post`). Browser automation must use an isolated profile restricted to approved localhost and corporate documentation/issue-tracker domains; raw banking/core-ledger origins are denied (`Tier 3`).

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SPEC-001 Security, Audit & Protocol Hardening (`[REQ-TRL-01..07]`):**
+  - Loopback bind default (`127.0.0.1`), `Origin` allowlist checks (`403`) on `/mcp` and `/admin/*`, and `--allowed-origin` CLI flag.
+  - Redacted JSONL audit logging (`trellis_mcp/audit.py`, `--audit-log`) stripping Bearer tokens and Luhn PANs.
+  - Repeated `401` per-IP lockout (`429`) and per-key tool `scopes` enforcement (`--scopes`, `POST /admin/keys`).
+  - MCP `protocolVersion` negotiation (`2025-06-18`, `2025-03-26`, `2024-11-05`) and `MCP-Protocol-Version` header validation (`400`).
+  - Luhn-validated PAN checks, JWT, Myanmar NRC, phone, and IBAN redaction detectors plus `wrap_untrusted_context` delimiter escaping.
+  - `TrellisKeyStore` `(st_mtime_ns, st_size)` cache and `/readyz` bundle digest TTL cache.
+  - Hardened `.claude/settings.json` deny list & wired `PreToolUse` / `Stop` hooks.
+- **Multi-AI Orchestration, vMF Knowledge & Expanded Skills (`[REQ-TRL-08..15]`):**
+  - `trellis_search_knowledge` (zero-dep TF-IDF + von Mises-Fisher clustering, `(cosine, kappa)` confidence, access filter, anomaly gate, behavioral drift, Canary sandbox, and RCA deduplication).
+  - `trellis_route_model` + LiteLLM config generator + `docs/standards/ai-bom.json` covering legally licensed commercial APIs (`perplexity/sonar*`, `xai/grok-*`, `gemini/*`, `anthropic/claude-*`, `openai/gpt-5*`, `mistral/*`) and commercial open-weight on-prem models (`Apache-2.0`, `Llama 3.3 Community License`).
+  - `trellis_pipeline`, `trellis_synthesize`, and unauthenticated A2A agent card (`GET /.well-known/agent.json`).
+  - Expanded skills/prompts from 11 to 18 (`/git-convention`, `/pb-pipeline`, `/pb-synthesize`, `/pb-route`, `/pb-knowledge`, `/data-classification`, `/mcp-registry-audit`, plus enhanced `/pb-plan` & `/pb-spec`) and test suite `tests/test_spec_001_upgrades.py`.
 - `trellis_test` MCP tool for REQ-linked failing test skeletons (Python, TypeScript, Java, C#).
 - `trellis_scan` MCP tool for secret/PAN scanning with optional `pip-audit` integration.
 - `trellis_classify` MCP tool implementing the Public/Internal/Confidential/Restricted AI prompt gate.

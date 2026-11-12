@@ -45,9 +45,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import OpenerDirector, ProxyHandler, Request, build_opener
 
 from trellis_mcp import __version__
+from trellis_mcp.audit import TrellisAuditLogger, hash_payload_sha256
 from trellis_mcp.branding import FAVICON_ICO
 from trellis_mcp.installer import build_remote_bundle, render_remote_install_script
-from trellis_mcp.server import TrellisMCPServer
+from trellis_mcp.pipeline import build_a2a_agent_card
+from trellis_mcp.server import SUPPORTED_PROTOCOL_VERSIONS, TrellisMCPServer
 from trellis_mcp.tools import PACKAGE_ROOT
 from trellis_mcp.ui import DASHBOARD_HTML
 
@@ -131,11 +133,13 @@ def verify_bearer_header(auth_header: str | None, expected_api_key: str) -> bool
 
 
 class TrellisKeyStore:
-    """File-backed API key registry with hashed-at-rest tokens, expiry, and rotation ([REQ-MCP-08])."""
+    """File-backed API key registry with hashed-at-rest tokens, expiry, scopes, caching, and rotation ([REQ-MCP-08])."""
 
     def __init__(self, keys_file: Path) -> None:
         self.keys_file = keys_file.resolve()
         self._lock = threading.Lock()
+        self._cache_sig: tuple[int, int] | None = None
+        self._cached_records: list[dict[str, Any]] = []
 
     def _load_records(self) -> list[dict[str, Any]]:
         if not self.keys_file.exists():
@@ -148,11 +152,35 @@ class TrellisKeyStore:
             return []
         return []
 
-    def _save_records(self, records: list[dict[str, Any]]) -> None:
+    def _load_records_cached(self) -> list[dict[str, Any]]:
+        """Return cached key records when file mtime_ns and size are unchanged ([REQ-TRL-06])."""
+        try:
+            st = self.keys_file.stat()
+            sig = (int(st.st_mtime_ns), int(st.st_size))
+        except OSError:
+            self._cache_sig = None
+            self._cached_records = []
+            return []
+        if self._cache_sig == sig:
+            return self._cached_records
+        records = self._load_records()
+        self._cache_sig = sig
+        self._cached_records = records
+        return records
+
+    def _save_records(self, records: list[dict[str, Any]], *, apply_acl: bool = True) -> None:
+        existed = self.keys_file.exists()
         self.keys_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": __version__, "keys": records}
         self.keys_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        _restrict_key_file_permissions(self.keys_file)
+        if apply_acl or not existed:
+            _restrict_key_file_permissions(self.keys_file)
+        try:
+            st = self.keys_file.stat()
+            self._cache_sig = (int(st.st_mtime_ns), int(st.st_size))
+            self._cached_records = list(records)
+        except OSError:
+            self._cache_sig = None
 
     @staticmethod
     def _sanitize_record(rec: dict[str, Any]) -> dict[str, Any]:
@@ -160,6 +188,7 @@ class TrellisKeyStore:
             "key_id": rec.get("key_id"),
             "label": rec.get("label"),
             "role": rec.get("role", "member"),
+            "scopes": rec.get("scopes"),
             "prefix": rec.get("prefix"),
             "created_at": rec.get("created_at"),
             "expires_at": rec.get("expires_at"),
@@ -173,7 +202,11 @@ class TrellisKeyStore:
         return expires_at is not None and expires_at <= now
 
     def generate_key(
-        self, label: str, role: str = "member", expires_days: float | None = None
+        self,
+        label: str,
+        role: str = "member",
+        expires_days: float | None = None,
+        scopes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Generate and persist a new hashed API key for a user or team ([REQ-MCP-08-02])."""
         norm_role = role.strip().lower() if role else "member"
@@ -192,11 +225,13 @@ class TrellisKeyStore:
         )
         salt = secrets.token_hex(16)
         prefix = f"{raw_key[:14]}...{raw_key[-4:]}"
+        norm_scopes = [str(s).strip() for s in scopes if str(s).strip()] if scopes else None
 
         record = {
             "key_id": key_id,
             "label": label.strip() or slug,
             "role": norm_role,
+            "scopes": norm_scopes,
             "salt": salt,
             "token_hash": _hash_token(raw_key, salt),
             "prefix": prefix,
@@ -289,7 +324,7 @@ class TrellisKeyStore:
         cand_bytes = candidate.encode("utf-8")
         matched: tuple[str, str, str] | None = None
         with self._lock:
-            records = self._load_records()
+            records = self._load_records_cached()
             dirty = False
             for rec in records:
                 if rec.get("revoked") or self._is_expired(rec, now):
@@ -312,8 +347,17 @@ class TrellisKeyStore:
                         rec["last_used_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                         dirty = True
             if dirty:
-                self._save_records(records)
+                self._save_records(records, apply_acl=False)
         return matched
+
+    def get_scopes(self, key_id: str) -> list[str] | None:
+        """Return allowed tool scopes for `key_id`, or None if unrestricted ([REQ-TRL-03])."""
+        with self._lock:
+            for rec in self._load_records_cached():
+                if rec.get("key_id") == key_id:
+                    scopes = rec.get("scopes")
+                    return list(scopes) if isinstance(scopes, list) and scopes else None
+        return None
 
     def verify_token(self, candidate: str | None) -> str | None:
         """Verify a candidate Bearer token in constant time and return its role or None."""
@@ -324,7 +368,7 @@ class TrellisKeyStore:
         """Return the number of non-revoked, non-expired keys ([REQ-P2-05])."""
         now = datetime.now(timezone.utc)
         with self._lock:
-            records = self._load_records()
+            records = self._load_records_cached()
         return sum(1 for rec in records if not rec.get("revoked") and not self._is_expired(rec, now))
 
     def find_active(self, id_or_label: str) -> dict[str, Any] | None:
@@ -333,7 +377,7 @@ class TrellisKeyStore:
         if not target:
             return None
         with self._lock:
-            records = self._load_records()
+            records = self._load_records_cached()
         for rec in records:
             if not rec.get("revoked") and (
                 rec.get("key_id") == target or rec.get("label") == target
@@ -344,7 +388,7 @@ class TrellisKeyStore:
     def list_keys(self) -> list[dict[str, Any]]:
         """Return sanitized metadata for all keys in the store."""
         with self._lock:
-            records = self._load_records()
+            records = self._load_records_cached()
         return [self._sanitize_record(r) for r in records]
 
     def revoke_key(self, id_or_label: str) -> dict[str, Any] | None:
@@ -372,7 +416,7 @@ class TrellisHTTPServer:
 
     def __init__(
         self,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         port: int = 8080,
         api_key: str | None = None,
         workspace_root: Path | None = None,
@@ -388,6 +432,10 @@ class TrellisHTTPServer:
         session_ttl_sec: float | None = None,
         session_secret: str | None = None,
         secure_cookies: bool | None = None,
+        allowed_origins: list[str] | tuple[str, ...] | None = None,
+        audit_log: Path | None = None,
+        auth_failure_limit: int = 5,
+        auth_lockout_sec: float = 60.0,
     ) -> None:
         if (tls_cert is None) != (tls_key is None):
             raise ValueError("Both `tls_cert` and `tls_key` must be provided together for HTTPS.")
@@ -449,6 +497,29 @@ class TrellisHTTPServer:
         )
         self._rate_lock = threading.Lock()
         self._rate_hits: dict[str, list[float]] = {}
+        self._auth_fail_lock = threading.Lock()
+        self._auth_failures: dict[str, list[float]] = {}
+        self._auth_lockout_until: dict[str, float] = {}
+        self.auth_failure_limit = int(auth_failure_limit)
+        self.auth_lockout_sec = float(auth_lockout_sec)
+        env_origins = [
+            o.strip().rstrip("/")
+            for o in os.environ.get("TRELLIS_ALLOWED_ORIGINS", "").split(",")
+            if o.strip()
+        ]
+        self.allowed_origins: set[str] | None = (
+            {str(o).strip().rstrip("/") for o in allowed_origins if str(o).strip()}
+            if allowed_origins is not None
+            else (set(env_origins) if env_origins else None)
+        )
+        resolved_audit_path: Path | None = audit_log
+        if resolved_audit_path is None and os.environ.get("TRELLIS_AUDIT_LOG"):
+            resolved_audit_path = Path(os.environ["TRELLIS_AUDIT_LOG"])
+        self.audit_logger = TrellisAuditLogger(resolved_audit_path)
+        self._bundle_cache_lock = threading.Lock()
+        self._bundle_digest_cache: str | None = None
+        self._bundle_digest_ts: float = 0.0
+        self._bundle_digest_ttl: float = 5.0
         self._sessions_lock = threading.Lock()
         self._sessions: dict[str, int] = {}
         self._metrics_lock = threading.Lock()
@@ -523,6 +594,7 @@ class TrellisHTTPServer:
                     path=self.path,
                     headers=req_headers,
                     body=raw_body,
+                    client_ip=client_ip,
                 )
                 self._send(status, resp_headers, resp_body)
 
@@ -782,6 +854,66 @@ class TrellisHTTPServer:
         scheme = (headers.get("x-forwarded-proto") or self.scheme).strip().lower()
         return origin.rstrip("/") == f"{scheme}://{host}"
 
+    def _origin_allowed(self, headers: dict[str, str]) -> bool:
+        """Validate Origin header on /mcp and /admin/* against explicit or loopback allowlist ([REQ-TRL-01])."""
+        origin = (headers.get("origin") or "").strip().rstrip("/")
+        if not origin:
+            return True
+        if self.allowed_origins is not None:
+            return origin in {o.strip().rstrip("/") for o in self.allowed_origins if o.strip()}
+        host = (headers.get("host") or f"{self.host}:{self.port}").strip()
+        scheme = (headers.get("x-forwarded-proto") or self.scheme).strip().lower()
+        allowed = {f"{scheme}://{host}", f"http://{host}", f"https://{host}"}
+        if self.host in ("127.0.0.1", "localhost", "::1"):
+            allowed.update(
+                {
+                    f"http://127.0.0.1:{self.port}",
+                    f"http://localhost:{self.port}",
+                    f"https://127.0.0.1:{self.port}",
+                    f"https://localhost:{self.port}",
+                    "http://127.0.0.1",
+                    "http://localhost",
+                }
+            )
+        return origin in allowed
+
+    def _is_locked_out(self, client_ip: str) -> int | None:
+        now = time.monotonic()
+        with self._auth_fail_lock:
+            until = self._auth_lockout_until.get(client_ip, 0.0)
+            if until > now:
+                return max(1, int(until - now))
+            if client_ip in self._auth_lockout_until:
+                self._auth_lockout_until.pop(client_ip, None)
+        return None
+
+    def _record_auth_failure(self, client_ip: str) -> None:
+        now = time.monotonic()
+        cutoff = now - 60.0
+        with self._auth_fail_lock:
+            history = [t for t in self._auth_failures.get(client_ip, []) if t >= cutoff]
+            history.append(now)
+            self._auth_failures[client_ip] = history
+            if len(history) >= max(1, self.auth_failure_limit):
+                self._auth_lockout_until[client_ip] = now + max(1.0, self.auth_lockout_sec)
+
+    def _clear_auth_failures(self, client_ip: str) -> None:
+        with self._auth_fail_lock:
+            self._auth_failures.pop(client_ip, None)
+            self._auth_lockout_until.pop(client_ip, None)
+
+    def _bundle_digest_cached(self) -> str:
+        now = time.monotonic()
+        with self._bundle_cache_lock:
+            if (now - self._bundle_digest_ts) < self._bundle_digest_ttl and self._bundle_digest_cache:
+                return self._bundle_digest_cache
+        bundle_raw = json.dumps(build_remote_bundle(self.workspace_root)).encode("utf-8")
+        digest = hashlib.sha256(bundle_raw).hexdigest()
+        with self._bundle_cache_lock:
+            self._bundle_digest_cache = digest
+            self._bundle_digest_ts = now
+        return digest
+
     def _record_key_usage(self, identity: tuple[str, str, str], clean_path: str) -> None:
         role, key_id, label = identity
         seen_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -821,12 +953,33 @@ class TrellisHTTPServer:
         path: str,
         headers: dict[str, str],
         body: bytes = b"",
+        client_ip: str = "127.0.0.1",
     ) -> tuple[int, dict[str, str], bytes]:
-        """Process an HTTP request, record metrics, and return `(status, headers, body)` ([REQ-P2-05])."""
+        """Process an HTTP request, record metrics and audit log, and return `(status, headers, body)` ([REQ-P2-05], [REQ-TRL-02])."""
         started = time.monotonic()
-        status, resp_headers, resp_body = self._dispatch_http(method, path, headers, body)
+        audit_ctx: dict[str, Any] = {}
+        status, resp_headers, resp_body = self._dispatch_http(
+            method, path, headers, body, client_ip=client_ip, audit_ctx=audit_ctx
+        )
+        elapsed = time.monotonic() - started
         clean_path = path.split("?", 1)[0].rstrip("/") or "/"
-        self._record_metrics(method, clean_path, status, time.monotonic() - started)
+        self._record_metrics(method, clean_path, status, elapsed)
+        try:
+            self.audit_logger.record(
+                client_ip=client_ip,
+                key_id=audit_ctx.get("key_id"),
+                role=audit_ctx.get("role"),
+                method=method.upper(),
+                path=clean_path,
+                status=status,
+                latency_ms=elapsed * 1000.0,
+                tool=audit_ctx.get("tool"),
+                model=audit_ctx.get("model"),
+                decision=audit_ctx.get("decision"),
+                args_sha256=hash_payload_sha256(body) if body else None,
+            )
+        except OSError:
+            pass
         return status, resp_headers, resp_body
 
     def _dispatch_http(
@@ -835,6 +988,9 @@ class TrellisHTTPServer:
         path: str,
         headers: dict[str, str],
         body: bytes = b"",
+        *,
+        client_ip: str = "127.0.0.1",
+        audit_ctx: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         """Internal request handler (wrapped by `dispatch_http` for observability)."""
         clean_path = path.split("?", 1)[0].rstrip("/") or "/"
@@ -866,7 +1022,6 @@ class TrellisHTTPServer:
             )
 
         if method == "GET" and clean_path == "/readyz":
-            bundle_raw = json.dumps(build_remote_bundle(self.workspace_root)).encode("utf-8")
             return _json_resp(
                 200,
                 {
@@ -877,11 +1032,16 @@ class TrellisHTTPServer:
                     "tls": self.scheme == "https",
                     "bundle_signing": bool(self.bundle_signing_key),
                     "active_keys": self.effective_active_keys(),
-                    "bundle_sha256": hashlib.sha256(bundle_raw).hexdigest(),
+                    "bundle_sha256": self._bundle_digest_cached(),
                     "max_body_bytes": self.max_body_bytes,
                     "rate_limit": self.rate_limit,
                 },
             )
+
+        if method == "GET" and clean_path == "/.well-known/agent.json":
+            host_hdr = (norm_headers.get("host") or f"{self.host}:{self.port}").strip()
+            scheme = (norm_headers.get("x-forwarded-proto") or self.scheme).strip().lower()
+            return _json_resp(200, build_a2a_agent_card(f"{scheme}://{host_hdr}"))
 
         if method == "GET" and clean_path == "/favicon.ico":
             return (
@@ -1010,6 +1170,28 @@ class TrellisHTTPServer:
                 405, {"error": f"Method not allowed on /admin/session: {method}"}
             )
 
+        if (clean_path == "/mcp" or clean_path.startswith("/admin/")) and not self._origin_allowed(
+            norm_headers
+        ):
+            return _json_resp(
+                403,
+                {
+                    "error": "Forbidden",
+                    "message": "Request Origin is not in the Trellis server allowlist ([REQ-TRL-01]).",
+                },
+            )
+
+        retry_after = self._is_locked_out(client_ip)
+        if retry_after is not None:
+            return _json_resp(
+                429,
+                {
+                    "error": "Too Many Requests",
+                    "message": "Authentication temporarily locked out after repeated failures ([REQ-TRL-03]).",
+                },
+                extra_headers={"Retry-After": str(retry_after)},
+            )
+
         auth_hdr = norm_headers.get("authorization")
         cookie_hdr = norm_headers.get("cookie")
         allow_cookie = (
@@ -1022,6 +1204,7 @@ class TrellisHTTPServer:
         )
         role = identity[0] if identity else None
         if role is None:
+            self._record_auth_failure(client_ip)
             return _json_resp(
                 401,
                 {
@@ -1030,8 +1213,12 @@ class TrellisHTTPServer:
                 },
                 extra_headers={"WWW-Authenticate": 'Bearer realm="trellis-mcp"'},
             )
+        self._clear_auth_failures(client_ip)
         if identity is not None:
             self._record_key_usage(identity, clean_path)
+            if audit_ctx is not None:
+                audit_ctx["role"] = identity[0]
+                audit_ctx["key_id"] = identity[1]
 
         if method == "GET" and clean_path == "/metrics":
             if role != "admin":
@@ -1107,6 +1294,9 @@ class TrellisHTTPServer:
             target_pyz.parent.mkdir(parents=True, exist_ok=True)
             target_pyz.write_bytes(body)
             self.mcp_server = TrellisMCPServer(workspace_root=target_pyz)
+            with self._bundle_cache_lock:
+                self._bundle_digest_cache = None
+                self._bundle_digest_ts = 0.0
             return _json_resp(
                 200,
                 {
@@ -1153,7 +1343,19 @@ class TrellisHTTPServer:
                 req_role = str(req_data.get("role", "member")).strip().lower() or "member"
                 if req_role not in ("admin", "member"):
                     return _json_resp(400, {"error": "role must be 'member' or 'admin'"})
-                created = self.key_store.generate_key(label=label, role=req_role)
+                raw_scopes = req_data.get("scopes")
+                scopes = (
+                    [str(s).strip() for s in raw_scopes if str(s).strip()]
+                    if isinstance(raw_scopes, list)
+                    else None
+                )
+                expires_days = req_data.get("expires_days")
+                created = self.key_store.generate_key(
+                    label=label,
+                    role=req_role,
+                    expires_days=int(expires_days) if expires_days is not None else None,
+                    scopes=scopes,
+                )
                 created["install_command"] = (
                     f'export TRELLIS_API_KEY="{created["api_key"]}" && '
                     f'curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" {public_base}/install.sh | sh'
@@ -1233,6 +1435,17 @@ class TrellisHTTPServer:
             if clean_path != "/mcp":
                 return _json_resp(404, {"error": f"Unknown POST endpoint: {clean_path}"})
 
+            proto_hdr = (norm_headers.get("mcp-protocol-version") or "").strip()
+            if proto_hdr and proto_hdr not in SUPPORTED_PROTOCOL_VERSIONS:
+                return _json_resp(
+                    400,
+                    {
+                        "error": "Bad Request",
+                        "message": f"Unsupported MCP-Protocol-Version: {proto_hdr} ([REQ-TRL-04]).",
+                        "supported": list(SUPPORTED_PROTOCOL_VERSIONS),
+                    },
+                )
+
             try:
                 payload = json.loads(body.decode("utf-8") if body else "")
             except json.JSONDecodeError as exc:
@@ -1245,7 +1458,31 @@ class TrellisHTTPServer:
                     },
                 )
 
+            scopes = self.key_store.get_scopes(identity[1]) if identity is not None else None
+
+            def _scope_error(item: dict[str, Any]) -> tuple[int, dict[str, str], bytes] | None:
+                if item.get("method") != "tools/call":
+                    return None
+                params = item.get("params") or {}
+                tool_name = params.get("name")
+                if audit_ctx is not None and isinstance(tool_name, str):
+                    audit_ctx["tool"] = tool_name
+                if scopes is not None and isinstance(tool_name, str) and tool_name not in scopes:
+                    if audit_ctx is not None:
+                        audit_ctx["decision"] = "deny:scope"
+                    return _json_resp(
+                        403,
+                        {
+                            "error": "Forbidden",
+                            "message": f"API key scope does not permit tool '{tool_name}' ([REQ-TRL-03]).",
+                        },
+                    )
+                return None
+
             if isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict) and (err := _scope_error(item)) is not None:
+                        return err
                 responses = [
                     resp
                     for item in payload
@@ -1253,6 +1490,9 @@ class TrellisHTTPServer:
                     and (resp := self.mcp_server.handle_request(item)) is not None
                 ]
                 return _json_resp(200, responses)
+
+            if isinstance(payload, dict) and (err := _scope_error(payload)) is not None:
+                return err
 
             response = self.mcp_server.handle_request(payload)
             if response is None:

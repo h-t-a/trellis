@@ -100,10 +100,38 @@ _COMMIT_CONVENTION_RE = re.compile(
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _PHONE_RE = re.compile(r"(?<!\d)(?:\+?\d{1,3}[ -]?)?(?:\(?\d{3}\)?[ -]?)\d{3}[ -]?\d{4}(?!\d)")
+_MM_PHONE_RE = re.compile(r"(?<!\d)(?:\+?959|09)\d{7,9}(?!\d)")
+_MM_NRC_RE = re.compile(r"\b(?:1[0-4]|[1-9])/[A-Za-z]{3,16}\([NCEPncep]\)\d{6}\b")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 _RESTRICTED_KEYWORDS = ("password", "passwd", "client_secret", "private key", "api_key", "apikey", "secret")
 _CONFIDENTIAL_KEYWORDS = ("customer", "pii", "salary", "balance", "ledger", "account number", "iban", "ssn", "national id")
+
+
+def _luhn_valid(digits: str) -> bool:
+    """Return True if a 13-19 digit string passes the Luhn check ([REQ-TRL-05])."""
+    if not 13 <= len(digits) <= 19 or not digits.isdigit():
+        return False
+    total = 0
+    for idx, ch in enumerate(reversed(digits)):
+        val = int(ch)
+        if idx % 2 == 1:
+            val *= 2
+            if val > 9:
+                val -= 9
+        total += val
+    return total % 10 == 0
+
+
+def wrap_untrusted_context(content: str, source: str = "external") -> str:
+    """Wrap external or retrieved text in escaped <untrusted_context> boundaries ([REQ-TRL-05])."""
+    safe_source = re.sub(r"[^a-zA-Z0-9._:/-]", "_", source or "external")[:64]
+    sanitized = re.sub(r"</?untrusted_context[^>]*>", "[TAG_STRIPPED]", content, flags=re.IGNORECASE)
+    return (
+        f'<untrusted_context source="{safe_source}" trust="untrusted">\n'
+        f"{sanitized}\n"
+        "</untrusted_context>"
+    )
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -553,13 +581,29 @@ def _is_placeholder_value(value: str) -> bool:
 
 def _scan_redaction_violations(text: str, ignore_placeholders: bool = False) -> list[str]:
     violations: list[str] = []
-    pan_match = _PAN_PATTERN.search(text)
-    if pan_match and not (ignore_placeholders and _is_placeholder_value(pan_match.group(0))):
-        violations.append("Potential unredacted 13-19 digit PAN / card / account number")
+    for pan_match in _PAN_PATTERN.finditer(text):
+        raw_pan = pan_match.group(0)
+        if ignore_placeholders and _is_placeholder_value(raw_pan):
+            continue
+        digits = re.sub(r"[^0-9]", "", raw_pan)
+        if _luhn_valid(digits):
+            violations.append("Potential unredacted Luhn-valid 13-19 digit PAN / card number")
+            break
     for pat in _SECRET_PATTERNS:
         match = pat.search(text)
         if match and not (ignore_placeholders and _is_placeholder_value(match.group(0))):
             violations.append(f"Credential / secret token pattern matched (`{pat.pattern[:32]}...`)")
+    jwt_match = _JWT_RE.search(text)
+    if jwt_match and not (ignore_placeholders and _is_placeholder_value(jwt_match.group(0))):
+        violations.append("JWT bearer token pattern detected")
+    nrc_match = _MM_NRC_RE.search(text)
+    if nrc_match and not (ignore_placeholders and _is_placeholder_value(nrc_match.group(0))):
+        violations.append("Regional national ID (Myanmar NRC) pattern detected")
+    if not ignore_placeholders:
+        if _MM_PHONE_RE.search(text):
+            violations.append("Regional phone number pattern detected")
+        if _IBAN_RE.search(text):
+            violations.append("IBAN / bank account pattern detected")
     return violations
 
 
@@ -594,6 +638,20 @@ def tool_trellis_rca(
         else "- *(Identify Entry Point -> Domain Service -> Repository/Adapter)*"
     )
 
+    similar_section = ""
+    try:
+        from .knowledge import find_similar_rcas
+
+        prior = find_similar_rcas(symptom, workspace_root=workspace_root, top_k=3)
+        if prior:
+            bullets = "\n".join(
+                f"- `{item['id']}` (similarity={item['similarity']}): {item['summary']}"
+                for item in prior
+            )
+            similar_section = f"\n## 5. Similar Prior RCAs (`[REQ-TRL-10]`)\n{bullets}\n"
+    except Exception:
+        similar_section = ""
+
     report = f"""# Trellis Fast RCA Report (`[REQ-RCA-01..03]`)
 
 ## 1. Symptom & Redacted Evidence
@@ -619,7 +677,7 @@ def tool_trellis_rca(
 1. **Red:** Write a failing unit/integration test reproducing `{symptom}`.
 2. **Green:** Apply the minimal root-cause diff (do not bundle unrelated refactors).
 3. **Verify:** Run the targeted test suite and confirm zero existing tests were skipped or weakened.
-"""
+{similar_section}"""
     return _ok(report)
 
 
@@ -1808,6 +1866,79 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "cost_per_1k_tokens": {"type": "number", "description": "Cost per 1,000 tokens when entries omit cost_usd."},
                 "period_days": {"type": "number", "description": "Only include entries from the last N days."},
             },
+        },
+    },
+    {
+        "name": "trellis_search_knowledge",
+        "description": "Search Trellis standards, ADRs, specs, and RCAs using L2-normalized vectors + von Mises-Fisher (vMF) confidence (cosine + kappa), access-aware provenance filtering, compression, and anomaly detection.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query or symptom description."},
+                "caller_clearance": {"type": "string", "enum": ["Public", "Internal", "Confidential", "Restricted"], "description": "Caller data-classification clearance for access-aware retrieval."},
+                "tenant": {"type": "string", "description": "Optional tenant scope filter."},
+                "top_k": {"type": "integer", "description": "Maximum number of chunks to return (default 5)."},
+                "deduplicate": {"type": "boolean", "description": "Compress near-duplicate chunks via cluster representatives."},
+                "rca_only": {"type": "boolean", "description": "Restrict search to historical RCA/debugging artifacts."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "trellis_route_model",
+        "description": "Select a compliant AI model and fallback chain based on Data Classification (Public..Restricted), AI Boundary Tier (1..3), and task type, with optional LiteLLM config export.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_type": {"type": "string", "enum": ["research", "coding", "review", "classify", "general"]},
+                "data_classification": {"type": "string", "enum": ["Public", "Internal", "Confidential", "Restricted"]},
+                "tier": {"type": "integer", "enum": [1, 2, 3]},
+                "emit_litellm_config": {"type": "boolean"},
+            },
+            "required": ["data_classification"],
+        },
+    },
+    {
+        "name": "trellis_pipeline",
+        "description": "Validate and advance the stateful pb-pipeline workflow (research -> plan -> spec -> implement -> review -> deploy) with Tier 2 human approval gates, recursive loop detection, and cross-model reviewer enforcement.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "current_stage": {"type": "string"},
+                "target_stage": {"type": "string"},
+                "tier": {"type": "integer", "enum": [1, 2, 3]},
+                "human_approved": {"type": "boolean"},
+                "history": {"type": "array", "items": {"type": "string"}},
+                "max_steps": {"type": "integer"},
+                "writer_model": {"type": "string"},
+                "reviewer_model": {"type": "string"},
+                "cross_model_review": {"type": "boolean"},
+            },
+            "required": ["current_stage", "target_stage"],
+        },
+    },
+    {
+        "name": "trellis_synthesize",
+        "description": "Synthesize multi-model outputs into consensus points, explicit divergences/disagreements, weighted confidence, and evidence citations for collaborative problem solving.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Problem statement or question posed to the AI models."},
+                "responses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "model": {"type": "string"},
+                            "answer": {"type": "string"},
+                            "confidence": {"type": "number"},
+                            "citations": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["model", "answer"],
+                    },
+                },
+            },
+            "required": ["prompt", "responses"],
         },
     },
 ]

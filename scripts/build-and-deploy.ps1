@@ -46,8 +46,8 @@ try {
         throw "Workspace doctor check failed. Fix reported issues before building."
     }
 
-    Write-Host "`n==> [Step 2/5] Running Automated Unit & Integration Tests ([REQ-MCP-01..09])..." -ForegroundColor Cyan
-    python -m unittest tests/test_trellis_mcp.py -v
+    Write-Host "`n==> [Step 2/5] Running Automated Unit & Integration Tests ([REQ-MCP-01..09], [REQ-TRL-01..14])..." -ForegroundColor Cyan
+    python -m unittest discover -s tests -v
     if ($LASTEXITCODE -ne 0) {
         throw "Automated tests failed. Aborting build and deployment."
     }

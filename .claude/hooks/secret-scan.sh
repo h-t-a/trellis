@@ -33,10 +33,11 @@
 
 set -euo pipefail
 
-# 1. Ensure forbidden local files (.env, CLAUDE.local.md, settings.local.json) are not staged
+# 1. Ensure forbidden local files (.env, .trellis_keys.json, CLAUDE.local.md, settings.local.json) are not staged
 STAGED_FILES="$(git diff --cached --name-only 2>/dev/null || true)"
-if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)\.env($|\.)|CLAUDE\.local\.md$|settings\.local\.json$' | grep -vq '\.env\.example$'; then
-  echo "[secret-scan] BLOCKED: Local environment or override file is staged for commit. See docs/standards/security-baseline.md." >&2
+FILTERED_STAGED="$(printf '%s\n' "${STAGED_FILES}" | grep -v '\.env\.example$' || true)"
+if printf '%s\n' "${FILTERED_STAGED}" | grep -Eq '(^|/)\.env($|\.)|\.trellis_keys\.json$|CLAUDE\.local\.md$|settings\.local\.json$'; then
+  echo "[secret-scan] BLOCKED: Local environment, keystore, or override file is staged for commit. See docs/standards/security-baseline.md." >&2
   exit 2
 fi
 
