@@ -17,14 +17,14 @@
 ```powershell
 python -m trellis_mcp --sync-workspace
 python -m trellis_mcp --check
-python -m unittest tests/test_trellis_mcp.py
+python -m unittest discover -s tests -v
 ```
 
 ## Tests
 
 - Add a failing test first (`trellis_test` can generate a skeleton), then implement.
-- Use requirement IDs in test names and docstrings.
-- Run the full suite before pushing: `python -m unittest tests/test_trellis_mcp.py`.
+- Use requirement IDs in test names and docstrings (`[REQ-NNN-XX]`).
+- Run the full suite (`42` tests across `test_trellis_mcp.py` and `test_spec_001_upgrades.py`) before pushing: `python -m unittest discover -s tests -v`.
 
 ## Commit Convention
 
@@ -41,4 +41,4 @@ python -m unittest tests/test_trellis_mcp.py
 ## Documentation
 
 - Update [CHANGELOG.md](./CHANGELOG.md) for user-visible changes.
-- Keep standards in `docs/standards/` as the single source of truth; link rather than duplicate.
+- Keep standards in `docs/standards/` and unified `/pb-*` skills in `.agents/skills/` as the single source of truth; run `python -m trellis_mcp --sync-workspace` after skill edits and link rather than duplicate.

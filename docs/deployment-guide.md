@@ -19,8 +19,11 @@ Every foundational and `SPEC-001` component required for local development, cros
 | `[x]` | **`[REQ-MCP-03]`** | **Cross-Device Sync & Global Installer:** Implemented `--sync-workspace` and `--install-global` in [`trellis_mcp/installer.py`](../trellis_mcp/installer.py) to sync `.agents/skills/` $\rightarrow$ `.claude/skills/` and install globally into `~/.gemini/config/` and `~/.claude/`. | `test_req_mcp_03_sync_workspace_and_install_global` |
 | `[x]` | **`[REQ-MCP-05..06]`** | **Multi-Threaded HTTP MCP Server with Constant-Time Bearer Auth:** Implemented [`TrellisHTTPServer`](../trellis_mcp/http_server.py) (`GET /healthz`, `POST /mcp`, `GET /bundle.json`, `GET /install.sh`) protected by `hmac.compare_digest`. | `test_req_mcp_05_06_http_server_bearer_auth_and_mcp_rpc` |
 | `[x]` | **`[REQ-MCP-07]`** | **Zero-Clone Remote Teammate Installer:** Teammates install all rules, `/pb-*` skills, and MCP config from a remote VM via `curl .../install.sh | sh` or `python -m trellis_mcp --install-remote <URL>` without cloning Git. | `test_req_mcp_07_zero_clone_remote_bundle_and_install` |
-| `[x]` | **`[REQ-MCP-08]`** | **Administrator API Key Auto-Generation & Team Key RBAC:** Implemented [`TrellisKeyStore`](../trellis_mcp/http_server.py) (`--auto-generate-key`, `--generate-key <label> --role [member\|admin]`, `--list-keys`, `--revoke-key`, plus `GET/POST/DELETE /admin/keys` HTTP endpoints). `member` keys can use `/mcp` and `/bundle.json` but receive `403 Forbidden` on `/admin/keys`. | `test_req_mcp_08_auto_generate_admin_key_and_issue_team_keys`, `test_req_mcp_08_cli_key_management` |
-| `[x]` | **`[REQ-MCP-09]`** | **Standalone Single-File `.pyz` Packaging & Windows VM Deploy Pipeline:** Added `--build-pyz` and zip-archive resource loading so `dist\trellis-mcp.pyz` (`~71 KB`) runs on the Windows VM without copying the repository folder tree, paired with [`scripts/build-and-deploy.ps1`](../scripts/build-and-deploy.ps1). | `test_req_mcp_09_build_and_run_standalone_pyz_bundle` |
+| `[x]` | **`[REQ-MCP-08..10]`** | **Hashed Admin Key Registry, Expiry, Rotation & RBAC:** Implemented [`TrellisKeyStore`](../trellis_mcp/http_server.py) with salted SHA-256 hashing at rest, Windows ACL locking, `--auto-generate-key` (`stderr` once), `--generate-key <label> --role [member\|admin] --expires-days <N>`, `--list-keys`, `--rotate-key`, `--revoke-key`, plus `GET/POST/PATCH/DELETE /admin/keys`. | `test_req_mcp_08_*`, `test_req_mcp_10_*` |
+| `[x]` | **`[REQ-MCP-09]`** | **Standalone Single-File `.pyz` Packaging & Signed Hot-Deploy:** Added `--build-pyz` (`~138 KB`, `53` bundled files) and HMAC-SHA256 signed `POST /admin/deploy` (`X-Trellis-Signature`), paired with [`scripts/build-and-deploy.ps1`](../scripts/build-and-deploy.ps1). | `test_req_mcp_09_build_and_run_standalone_pyz_bundle` |
+| `[x]` | **`[REQ-P2-01..06]`** | **Product Depth & Observability:** Added `trellis_test`, `trellis_scan`, `trellis_classify`, `trellis_mcp_registry`, unauthenticated `GET /readyz`, admin-only `GET /metrics`, and doctor dry-run/parity/link validation. | `test_req_p2_01_*` .. `test_req_p2_06_*` |
+| `[x]` | **`[REQ-P3-01..07]`** | **IDE Bridge, Provenance, Analytics & Admin Dashboard UI:** Added `--emit-config` (`vscode`, `jetbrains`, `cursor`, `windsurf`, `claude`), `--sync-cache` + `trellis_verify`, `--usage-report` / `trellis_analytics`, and the browser Admin Dashboard ([`ui.py`](../trellis_mcp/ui.py), [`branding.py`](../trellis_mcp/branding.py)) with 15-minute `HttpOnly` sessions, `X-Trellis-CSRF`, nonce-CSP, key editing (`PATCH`), search/filters, and light/dark themes. | `test_req_p3_01_*` .. `test_req_p3_07_*` |
+| `[x]` | **`[REQ-TRL-01..15]`** | **`SPEC-001` Hardening, Multi-AI Router, vMF Search & 17 `/pb-*` Unified Skills:** Added `127.0.0.1` loopback bind default, `Origin` allowlist (`403`), `429` auth lockout, per-key tool `--scopes`, redacted JSONL `--audit-log`, MCP `protocolVersion` negotiation, Luhn/JWT/NRC/IBAN redaction, vMF `trellis_search_knowledge`, `trellis_route_model` + [`ai-bom.json`](./standards/ai-bom.json), `trellis_pipeline`, `trellis_synthesize`, A2A `/.well-known/agent.json`, and 17 `/pb-*` skills served over MCP `prompts/*`. | `test_spec_001_upgrades.py` (`12` tests) |
 
 ---
 
@@ -46,7 +49,7 @@ Complete these steps **once** on your Windows VM (`<vm-ip>`, `<domain>\<vm-user>
     .\setup-vm-once.ps1
     ```
   - This single script creates `C:\Trellis\trellis-mcp.pyz`, opens Windows Firewall for TCP `8080` and WinRM `5985`, registers & starts the `TrellisMCP` background Scheduled Task (`AtStartup`), verifies `http://127.0.0.1:8080/healthz`, and prints your **Administrator API Key (`trl_admin_...`)** and initial **Team Member Key (`trl_team_ibanking_...`)**!
-- [ ] **Step 2.5 — Record Your Auto-Generated Admin Key & Issue Your First Team Key:**
+- [ ] **Step 2.4 — Record Your Auto-Generated Admin Key & Issue Your First Team Key:**
   - On the VM, inspect or generate keys against `C:\Trellis\.trellis_keys.json`:
     ```powershell
     # List the auto-generated admin key metadata
@@ -121,15 +124,18 @@ flowchart LR
 
 ---
 
-## 4. Administrator Key Operations Quick Reference
+## 4. Administrator Key Operations & Dashboard Quick Reference
 
-All keys are stored in `C:\Trellis\.trellis_keys.json` on the VM and survive `.pyz` upgrades. Pass `--scopes` (or `"scopes"` JSON field) when restricting a member key to specific tools.
+All keys are stored as salted SHA-256 hashes in `C:\Trellis\.trellis_keys.json` on the VM and survive `.pyz` upgrades. Pass `--scopes` (or `"scopes"` JSON field) when restricting a member key to specific tools, or manage keys interactively in the browser at `http://<vm-ip>:8080/admin/dashboard`.
 
-| Operation | CLI Command on VM (`C:\Trellis`) | Remote HTTP Call from Your Workstation |
+| Operation | CLI Command on VM (`C:\Trellis`) | Remote HTTP Call / Browser UI |
 | :--- | :--- | :--- |
-| **Issue Member Key for a User/Team** | `python C:\Trellis\trellis-mcp.pyz --generate-key <team-name> --role member` | `POST http://<vm-ip>:8080/admin/keys` with `{"label": "<team-name>", "role": "member"}` |
-| **Issue Scoped Member Key** | `python C:\Trellis\trellis-mcp.pyz --generate-key <team-name> --role member --scopes trellis_get_standard,trellis_search_knowledge` | `POST http://<vm-ip>:8080/admin/keys` with `{"label": "<team-name>", "role": "member", "scopes": ["trellis_get_standard"]}` |
-| **Issue Another Admin Key** | `python C:\Trellis\trellis-mcp.pyz --generate-key <admin-name> --role admin` | `POST http://<vm-ip>:8080/admin/keys` with `{"label": "<admin-name>", "role": "admin"}` |
-| **List All Keys (Masked)** | `python C:\Trellis\trellis-mcp.pyz --list-keys` | `GET http://<vm-ip>:8080/admin/keys` |
-| **Revoke Key Immediately** | `python C:\Trellis\trellis-mcp.pyz --revoke-key <key_id_or_label>` | `DELETE http://<vm-ip>:8080/admin/keys/<key_id_or_label>` |
+| **Open Browser Admin Dashboard** | N/A | Browse `GET http://<vm-ip>:8080/admin/dashboard` -> signs in via `POST /admin/session` (`HttpOnly` cookie + `X-Trellis-CSRF`) |
+| **Issue Member Key for a User/Team** | `python C:\Trellis\trellis-mcp.pyz --generate-key <team-name> --role member --expires-days 90` | `POST /admin/keys` with `{"label": "<team-name>", "role": "member", "expires_days": 90}` |
+| **Issue Scoped Member Key** | `python C:\Trellis\trellis-mcp.pyz --generate-key <team-name> --role member --scopes trellis_get_standard,trellis_search_knowledge` | `POST /admin/keys` with `{"label": "<team-name>", "role": "member", "scopes": ["trellis_get_standard"]}` |
+| **Issue Another Admin Key** | `python C:\Trellis\trellis-mcp.pyz --generate-key <admin-name> --role admin` | `POST /admin/keys` with `{"label": "<admin-name>", "role": "admin"}` |
+| **List All Keys (Masked)** | `python C:\Trellis\trellis-mcp.pyz --list-keys` | `GET /admin/keys` |
+| **Edit Key Label / Role** | Use HTTP `PATCH` or Admin Dashboard **Edit** modal | `PATCH /admin/keys/<key_id>` with `{"label": "...", "role": "member\|admin"}` |
+| **Rotate Active Key** | `python C:\Trellis\trellis-mcp.pyz --rotate-key <key_id_or_label> --expires-days 90` | Revoke old key + issue replacement |
+| **Revoke Key Immediately** | `python C:\Trellis\trellis-mcp.pyz --revoke-key <key_id_or_label>` | `DELETE /admin/keys/<key_id_or_label>` |
 
