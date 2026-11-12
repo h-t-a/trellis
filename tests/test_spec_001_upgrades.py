@@ -474,24 +474,37 @@ class TestSpec001Upgrades(unittest.TestCase):
             self.assertIn("FAIL", reg["content"][0]["text"])
 
     def test_req_trl_15_expanded_skills_and_prompts_synced(self) -> None:
-        """[REQ-TRL-15] Expanded governance/multi-AI skills exist, sync cleanly, and resolve via MCP prompts."""
+        """[REQ-TRL-15] All skills use /pb-<name>, have zero review duplication, sync cleanly, and resolve via MCP prompts."""
         from trellis_mcp.server import TrellisMCPServer
 
         expected_skills = {
-            "git-convention",
             "pb-plan",
             "pb-spec",
             "pb-pipeline",
-            "pb-synthesize",
+            "pb-rca",
+            "pb-enhance",
+            "pb-handoff",
+            "pb-review",
+            "pb-release-check",
             "pb-route",
+            "pb-synthesize",
             "pb-knowledge",
-            "data-classification",
-            "mcp-registry-audit",
+            "pb-git-convention",
+            "pb-data-classification",
+            "pb-mcp-audit",
+            "pb-security-audit",
+            "pb-test-writer",
+            "pb-perf-test",
         }
+        # Confirm no duplicate standalone code-review folder remains and all skills use pb-*
+        skill_dirs = {p.parent.name for p in (REPO_ROOT / ".agents" / "skills").glob("*/SKILL.md")}
+        self.assertEqual(skill_dirs, expected_skills)
+        self.assertTrue(all(name.startswith("pb-") for name in skill_dirs))
+
         srv = TrellisMCPServer(workspace_root=REPO_ROOT)
         prompts_resp = srv.handle_request({"jsonrpc": "2.0", "id": 1, "method": "prompts/list"})
         prompt_names = {p["name"] for p in prompts_resp["result"]["prompts"]}
-        self.assertTrue(expected_skills.issubset(prompt_names))
+        self.assertEqual(prompt_names, expected_skills)
 
         for name in sorted(expected_skills):
             self.assertTrue((REPO_ROOT / ".agents" / "skills" / name / "SKILL.md").is_file(), name)
@@ -501,6 +514,10 @@ class TestSpec001Upgrades(unittest.TestCase):
                 {"jsonrpc": "2.0", "id": 2, "method": "prompts/get", "params": {"name": name}}
             )
             self.assertNotIn("error", got, name)
+            got_slash = srv.handle_request(
+                {"jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": {"name": f"/{name}"}}
+            )
+            self.assertNotIn("error", got_slash, name)
 
 
 if __name__ == "__main__":

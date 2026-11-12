@@ -23,6 +23,6 @@ description: Classify task cost/risk (S/M/L & AI Boundary Tier 1-3), draft an Im
 2. **Targeted Read-Only & Semantic Context Inspection (`trellis_search_knowledge`):**
    - Query `trellis_search_knowledge` for matching standards or prior RCAs, then read only the specific `@file`s relevant to the task without making code edits.
 3. **Create Implementation Plan Artifact:**
-   - Draft the plan following [templates/implementation-plan.md](../../templates/implementation-plan.md) (including an inline 4-section Micro-Spec for Class M tasks), listing branch name (`<type>/<slug>` per `git-convention`), exact files to touch, cross-model reviewer assignment (`trellis_pipeline`), and failing tests (`[REQ-NNN-XX]`) to write first.
+   - Draft the plan following [templates/implementation-plan.md](../../templates/implementation-plan.md) (including an inline 4-section Micro-Spec for Class M tasks), listing branch name (`<type>/<slug>` per `/pb-git-convention`), exact files to touch, cross-model reviewer assignment (`trellis_pipeline`), and failing tests (`[REQ-NNN-XX]`) to write first.
 4. **STOP for Human Approval (`trellis_pipeline`):**
    - Request human review (`HTA` / reviewer) on the Implementation Plan artifact (`PAUSED_FOR_APPROVAL`) before modifying project code.

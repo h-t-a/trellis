@@ -26,7 +26,7 @@ Every repository and developer workstation adopting this playbook must enforce t
    - Remember the core principle: **a rule is a request; a hook is a guarantee.**
    - Use pre-execution command validation hooks (`.claude/hooks/validate-bash.sh`) to block destructive or unsafe shell commands (e.g., recursive deletions, force pushes, or outbound data exfiltration).
 7. **Dedicated Security Auditor Subagent:**
-   - Maintain a read-only `security-auditor` subagent (`.claude/agents/security-auditor.md`) and `security-audit` skill to review authentication, authorization, input validation, dependency changes, and AI boundary compliance prior to merge.
+   - Maintain a read-only `security-auditor` subagent (`.claude/agents/security-auditor.md`) and `/pb-security-audit` skill to review authentication, authorization, input validation, dependency changes, and AI boundary compliance prior to merge.
 
 ---
 

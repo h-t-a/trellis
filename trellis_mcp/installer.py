@@ -71,6 +71,14 @@ def sync_workspace(repo_root: Path) -> str:
                 command_text = skill_md.read_text(encoding="utf-8").replace("(../../../", "(../../")
                 (claude_commands_dir / f"{skill_name}.md").write_text(command_text, encoding="utf-8")
 
+        synced_set = set(synced_skills)
+        for existing_dir in sorted(claude_skills_dir.iterdir()):
+            if existing_dir.is_dir() and existing_dir.name not in synced_set:
+                shutil.rmtree(existing_dir, ignore_errors=True)
+        for existing_cmd in sorted(claude_commands_dir.glob("*.md")):
+            if existing_cmd.stem not in synced_set:
+                existing_cmd.unlink(missing_ok=True)
+
     # Remove deprecated .agents/workflows/*.md files (F01)
     workflows_dir = root / ".agents" / "workflows"
     removed_workflows: list[str] = []

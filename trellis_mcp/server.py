@@ -15,6 +15,7 @@ from trellis_mcp.tools import (
     PACKAGE_ROOT,
     STANDARD_FILE_MAP,
     TOOL_DEFINITIONS,
+    list_bundled_skills,
     read_bundled_text,
     tool_trellis_analytics,
     tool_trellis_budget,
@@ -83,8 +84,8 @@ PROMPT_DEFINITIONS: list[dict[str, Any]] = [
         "arguments": [],
     },
     {
-        "name": "git-convention",
-        "description": "Enforce Conventional Commits, banking commit types, semantic branch names, and pre-push scans.",
+        "name": "pb-git-convention",
+        "description": "Enforce Conventional Commits, banking commit types (sec/audit/feat/fix), semantic branches, and pre-push scans.",
         "arguments": [],
     },
     {
@@ -117,16 +118,75 @@ PROMPT_DEFINITIONS: list[dict[str, Any]] = [
         ],
     },
     {
-        "name": "data-classification",
+        "name": "pb-data-classification",
         "description": "Classify data sensitivity and run Luhn PAN, JWT, Myanmar NRC, phone, and IBAN redaction scans.",
         "arguments": [],
     },
     {
-        "name": "mcp-registry-audit",
+        "name": "pb-mcp-audit",
         "description": "Audit MCP server allowlist, SHA-256/HMAC standard provenance, and cost/quota telemetry.",
         "arguments": [],
     },
+    {
+        "name": "pb-security-audit",
+        "description": "Audit code, configuration, hooks, and AI customizations against Security Baseline and AI Boundary tiers.",
+        "arguments": [],
+    },
+    {
+        "name": "pb-test-writer",
+        "description": "Write failing [REQ-NNN-XX] tests first, run full suites, and enforce zero weakened assertions.",
+        "arguments": [],
+    },
+    {
+        "name": "pb-perf-test",
+        "description": "Design, size, and evaluate performance tests using Performance SLA Standard and Little's Law.",
+        "arguments": [],
+    },
 ]
+
+
+def _extract_skill_description(skill_text: str, fallback: str) -> str:
+    lines = skill_text.splitlines()
+    if len(lines) >= 3 and lines[0].strip() == "---":
+        for line in lines[1:15]:
+            if line.strip() == "---":
+                break
+            if line.lower().startswith("description:"):
+                desc = line.split(":", 1)[1].strip().strip('"').strip("'")
+                if desc and desc not in (">-", "|", ">"):
+                    return desc
+    return fallback
+
+
+def _build_prompt_catalog(workspace_root: Path | None) -> list[dict[str, Any]]:
+    """Expose every canonical `/pb-*` bundled skill via MCP prompts/list."""
+    metadata_by_name = {entry["name"]: dict(entry) for entry in PROMPT_DEFINITIONS}
+    bundled = list_bundled_skills(workspace_root=workspace_root)
+    if not bundled:
+        return list(PROMPT_DEFINITIONS)
+
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for base in PROMPT_DEFINITIONS:
+        name = base["name"]
+        if name in bundled:
+            ordered.append(dict(base))
+            seen.add(name)
+    for skill_name, skill_text in sorted(bundled.items()):
+        if skill_name in seen:
+            continue
+        meta = metadata_by_name.get(skill_name)
+        ordered.append(
+            meta
+            or {
+                "name": skill_name,
+                "description": _extract_skill_description(
+                    skill_text, f"Trellis /{skill_name} workflow skill"
+                ),
+                "arguments": [],
+            }
+        )
+    return ordered
 
 
 class TrellisMCPServer:
@@ -236,33 +296,14 @@ class TrellisMCPServer:
                 )
 
             if method == "prompts/list":
-                return self._response(msg_id, {"prompts": PROMPT_DEFINITIONS})
+                return self._response(
+                    msg_id, {"prompts": _build_prompt_catalog(self.workspace_root)}
+                )
 
             if method == "prompts/get":
-                name = str(params.get("name", ""))
-                skill_text = read_bundled_text(
-                    f".agents/skills/{name}/SKILL.md", workspace_root=self.workspace_root
-                )
-                if skill_text is not None:
-                    return self._response(
-                        msg_id,
-                        {
-                            "description": f"Trellis /{name} workflow prompt",
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": {"type": "text", "text": skill_text},
-                                }
-                            ],
-                        },
-                    )
-                name = str(params.get("name", ""))
-                skill_file = self.workspace_root / ".agents" / "skills" / name / "SKILL.md"
-                if not skill_file.exists():
-                    skill_file = PACKAGE_ROOT / ".agents" / "skills" / name / "SKILL.md"
-                if not skill_file.exists():
-                    return self._error(msg_id, -32602, f"Unknown prompt/skill: {name}")
-                name = str(params.get("name", ""))
+                name = str(params.get("name", "")).strip().lstrip("/")
+                if not name:
+                    return self._error(msg_id, -32602, "Prompt/skill name is required")
                 skill_text = read_bundled_text(
                     f".agents/skills/{name}/SKILL.md", workspace_root=self.workspace_root
                 )
@@ -271,7 +312,7 @@ class TrellisMCPServer:
                 return self._response(
                     msg_id,
                     {
-                        "description": f"Trellis /{name} workflow prompt",
+                        "description": f"Trellis /{name} workflow skill",
                         "messages": [
                             {
                                 "role": "user",
