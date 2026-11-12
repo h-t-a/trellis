@@ -3,18 +3,25 @@
 Exposes:
 - `GET    /healthz`          -> Unauthenticated liveness probe (`200 OK`)
 - `GET    /readyz`           -> Unauthenticated readiness/observability probe (version, bundle hash, uptime)
+- `GET    /favicon.ico`      -> Unauthenticated dashboard favicon
 - `GET    /metrics`          -> Admin-only JSON metrics and per-key usage counters (`[REQ-P2-05]`)
 - `POST   /mcp`              -> Protected JSON-RPC 2.0 MCP endpoint (`Authorization: Bearer <API_KEY>`)
 - `GET    /bundle.json`      -> Protected skill & rule bundle for zero-clone remote client setup
 - `GET    /install.sh`       -> Protected shell bootstrap script (`curl -H "Authorization: Bearer $KEY" .../install.sh | sh`)
 - `GET    /admin/keys`       -> Admin-only list of issued user/team API keys (`[REQ-MCP-08]`)
 - `POST   /admin/keys`       -> Admin-only auto-generation of a new user/team API key (`[REQ-MCP-08]`)
+- `PATCH  /admin/keys/<id>`  -> Admin-only update of a key's label or role
 - `DELETE /admin/keys/<id>`  -> Admin-only immediate key revocation (`[REQ-MCP-08]`)
 - `GET    /admin/dashboard`  -> Unauthenticated HTML shell for the admin key-management dashboard (`[REQ-P3-02]`)
+- `POST   /admin/session`    -> Exchange an admin API key for a short-lived HttpOnly session cookie (`[REQ-P3-06]`)
+- `GET    /admin/session`    -> Return the current browser session status
+- `DELETE /admin/session`    -> Revoke and clear the browser session
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import io
@@ -30,6 +37,7 @@ import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from email.message import Message
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -37,9 +45,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import OpenerDirector, ProxyHandler, Request, build_opener
 
 from trellis_mcp import __version__
+from trellis_mcp.branding import FAVICON_ICO
 from trellis_mcp.installer import build_remote_bundle, render_remote_install_script
 from trellis_mcp.server import TrellisMCPServer
 from trellis_mcp.tools import PACKAGE_ROOT
+from trellis_mcp.ui import DASHBOARD_HTML
 
 _ACTIVE_SERVERS: dict[str, "TrellisHTTPServer"] = {}
 
@@ -48,85 +58,13 @@ DEFAULT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
 DEFAULT_RATE_LIMIT = 120  # requests allowed per client per window
 DEFAULT_RATE_WINDOW_SEC = 60.0
 DEFAULT_REQUEST_TIMEOUT_SEC = 15.0
+DEFAULT_SESSION_TTL_SEC = 900  # 15 minutes
 _SIGNATURE_HEADER = "x-trellis-signature"
 _BUNDLE_SIGNATURE_HEADER = "x-trellis-bundle-signature"
-
-DASHBOARD_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trellis Key Dashboard</title>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:2rem;max-width:60rem}
-input,select,button{padding:.4rem .55rem;margin:.2rem;font:inherit}
-pre{background:#111;color:#cde;padding:1rem;border-radius:.4rem;overflow:auto;min-height:6rem}
-fieldset{margin:1rem 0;padding:.75rem;border:1px solid #bbb;border-radius:.4rem}
-label{display:inline-block;min-width:5rem}
-</style>
-</head>
-<body>
-<h1>Trellis Key Dashboard</h1>
-<p>Admin-only. The key is held in <code>sessionStorage</code> for this tab and is never sent to the page HTML.</p>
-<fieldset>
-  <legend>Admin API key</legend>
-  <input id="key" type="password" size="42" placeholder="Bearer token">
-  <button id="save">Use key</button>
-  <button id="clear">Forget</button>
-</fieldset>
-<fieldset>
-  <legend>Keys</legend>
-  <button id="list">List keys</button>
-  <div>
-    <label for="label">Label</label><input id="label" placeholder="team-ibanking">
-    <label for="role">Role</label><select id="role"><option>member</option><option>admin</option></select>
-    <button id="generate">Generate</button>
-  </div>
-  <div>
-    <label for="target">Revoke</label><input id="target" placeholder="key id or label">
-    <button id="revoke">Revoke</button>
-  </div>
-</fieldset>
-<pre id="out">Ready.</pre>
-<script>
-const storeKey = "trellisAdminKey";
-const keyInput = document.getElementById("key");
-const out = document.getElementById("out");
-keyInput.value = sessionStorage.getItem(storeKey) || "";
-function show(data){ out.textContent = JSON.stringify(data, null, 2); }
-function headers(){
-  const key = keyInput.value.trim();
-  if(!key){ throw new Error("Enter an admin API key first."); }
-  return {"Authorization": "Bearer " + key, "Content-Type": "application/json"};
-}
-async function call(method, url, body){
-  try {
-    const resp = await fetch(url, {method, headers: headers(), body: body ? JSON.stringify(body) : undefined});
-    const text = await resp.text();
-    let data; try { data = JSON.parse(text); } catch { data = {status: resp.status, body: text}; }
-    show({status: resp.status, data});
-  } catch (err) { show({error: String(err.message || err)}); }
-}
-document.getElementById("save").onclick = () => {
-  sessionStorage.setItem(storeKey, keyInput.value.trim());
-  show({saved: true});
-};
-document.getElementById("clear").onclick = () => {
-  sessionStorage.removeItem(storeKey); keyInput.value = ""; show({cleared: true});
-};
-document.getElementById("list").onclick = () => call("GET", "/admin/keys");
-document.getElementById("generate").onclick = () => call("POST", "/admin/keys", {
-  label: document.getElementById("label").value || "team", role: document.getElementById("role").value
-});
-document.getElementById("revoke").onclick = () => {
-  const target = document.getElementById("target").value.trim();
-  if(target){ call("DELETE", "/admin/keys/" + encodeURIComponent(target)); }
-  else { show({error: "Enter a key id or label to revoke."}); }
-};
-</script>
-</body>
-</html>
-"""
+_CSRF_HEADER = "x-trellis-csrf"
+_SESSION_VERSION = "v1"
+_SESSION_COOKIE_SECURE = "__Host-trellis_admin"
+_SESSION_COOKIE_DEV = "trellis_admin_session"
 
 
 def compute_hmac_signature(payload: bytes, key: str) -> str:
@@ -276,6 +214,37 @@ class TrellisKeyStore:
         result["api_key"] = raw_key
         return result
 
+    def update_key(
+        self,
+        id_or_label: str,
+        label: str | None = None,
+        role: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update the label or role of an existing key."""
+        norm_role = role.strip().lower() if role is not None else None
+        if norm_role is not None and norm_role not in ("admin", "member"):
+            raise ValueError("Role must be 'admin' or 'member'.")
+        target = str(id_or_label or "").strip()
+        if not target:
+            return None
+        with self._lock:
+            records = self._load_records()
+            for rec in records:
+                if rec.get("key_id") != target and rec.get("label") != target:
+                    continue
+                if label is not None:
+                    new_label = label.strip()
+                    if not new_label:
+                        raise ValueError("Label cannot be empty.")
+                    if len(new_label) > 64:
+                        raise ValueError("Label must be 64 characters or fewer.")
+                    rec["label"] = new_label
+                if norm_role is not None:
+                    rec["role"] = norm_role
+                self._save_records(records)
+                return self._sanitize_record(rec)
+        return None
+
     def ensure_admin_key(self) -> tuple[str | None, bool]:
         """Return an existing active admin key or auto-generate one ([REQ-MCP-08-01]).
 
@@ -416,6 +385,9 @@ class TrellisHTTPServer:
         rate_limit: int = DEFAULT_RATE_LIMIT,
         rate_window_sec: float = DEFAULT_RATE_WINDOW_SEC,
         request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC,
+        session_ttl_sec: float | None = None,
+        session_secret: str | None = None,
+        secure_cookies: bool | None = None,
     ) -> None:
         if (tls_cert is None) != (tls_key is None):
             raise ValueError("Both `tls_cert` and `tls_key` must be provided together for HTTPS.")
@@ -449,8 +421,36 @@ class TrellisHTTPServer:
         self.rate_limit = int(rate_limit)
         self.rate_window_sec = float(rate_window_sec)
         self.request_timeout_sec = float(request_timeout_sec)
+        self.scheme = "https" if tls_cert and tls_key else "http"
+        ttl = (
+            session_ttl_sec
+            if session_ttl_sec is not None
+            else float(os.environ.get("TRELLIS_SESSION_TTL_SEC", DEFAULT_SESSION_TTL_SEC))
+        )
+        self.session_ttl_sec = max(60, int(ttl))
+        self.session_secret = (
+            session_secret
+            if session_secret is not None
+            else os.environ.get("TRELLIS_SESSION_SECRET", "")
+        ).strip() or secrets.token_hex(32)
+        env_secure = os.environ.get("TRELLIS_SECURE_COOKIES", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self.secure_cookies = (
+            bool(secure_cookies)
+            if secure_cookies is not None
+            else (self.scheme == "https" or env_secure)
+        )
+        self.session_cookie_name = (
+            _SESSION_COOKIE_SECURE if self.secure_cookies else _SESSION_COOKIE_DEV
+        )
         self._rate_lock = threading.Lock()
         self._rate_hits: dict[str, list[float]] = {}
+        self._sessions_lock = threading.Lock()
+        self._sessions: dict[str, int] = {}
         self._metrics_lock = threading.Lock()
         self._started_at = time.monotonic()
         self._metrics: dict[str, Any] = {
@@ -461,7 +461,6 @@ class TrellisHTTPServer:
         }
         self._key_usage: dict[str, dict[str, Any]] = {}
         self.mcp_server = TrellisMCPServer(workspace_root=self.workspace_root)
-        self.scheme = "https" if tls_cert and tls_key else "http"
 
         parent = self
 
@@ -533,6 +532,9 @@ class TrellisHTTPServer:
             def do_POST(self) -> None:  # noqa: N802
                 self._handle_all("POST")
 
+            def do_PATCH(self) -> None:  # noqa: N802
+                self._handle_all("PATCH")
+
             def do_DELETE(self) -> None:  # noqa: N802
                 self._handle_all("DELETE")
 
@@ -578,19 +580,207 @@ class TrellisHTTPServer:
             return store_count + 1
         return store_count
 
+    def _authenticate_token(self, candidate: str | None) -> tuple[str, str, str] | None:
+        """Validate a raw API key and return `(role, key_id, label)`."""
+        if not candidate:
+            return None
+        if self.api_key and hmac.compare_digest(
+            candidate.encode("utf-8"), self.api_key.encode("utf-8")
+        ):
+            return ("admin", "env-admin", "env:TRELLIS_API_KEY")
+        return self.key_store.authenticate(candidate)
+
+    def _authenticate_request(
+        self,
+        auth_header: str | None,
+        cookie_header: str | None = None,
+        allow_cookie: bool = False,
+    ) -> tuple[tuple[str, str, str] | None, str | None]:
+        """Return `((role, key_id, label), source)` for Bearer or browser-session auth."""
+        identity = self._authenticate_token(extract_bearer_token(auth_header))
+        if identity is not None:
+            return identity, "bearer"
+        if allow_cookie:
+            session = self._read_session(cookie_header)
+            if session is not None:
+                return session[0], "cookie"
+        return None, None
+
     def _authenticate_identity(
-        self, auth_header: str | None
+        self, auth_header: str | None, cookie_header: str | None = None
     ) -> tuple[str, str, str] | None:
         """Return `(role, key_id, label)` for a valid Authorization header ([REQ-P2-05])."""
-        if self.api_key and verify_bearer_header(auth_header, self.api_key):
-            return ("admin", "env-admin", "env:TRELLIS_API_KEY")
-        candidate = extract_bearer_token(auth_header)
-        return self.key_store.authenticate(candidate)
+        identity, _ = self._authenticate_request(
+            auth_header, cookie_header, allow_cookie=False
+        )
+        return identity
 
     def _authenticate_role(self, auth_header: str | None) -> str | None:
         """Return 'admin', 'member', or None for the provided Authorization header."""
         identity = self._authenticate_identity(auth_header)
         return identity[0] if identity else None
+
+    @staticmethod
+    def _b64url_encode(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _b64url_decode(value: str) -> bytes:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode(value + padding)
+
+    @staticmethod
+    def _cookie_value(cookie_header: str | None, name: str) -> str | None:
+        if not cookie_header:
+            return None
+        try:
+            jar = SimpleCookie()
+            jar.load(cookie_header)
+        except CookieError:
+            return None
+        morsel = jar.get(name)
+        return morsel.value if morsel is not None else None
+
+    def _create_session_token(
+        self, identity: tuple[str, str, str]
+    ) -> tuple[str, int]:
+        now = int(time.time())
+        expires = now + self.session_ttl_sec
+        session_id = secrets.token_hex(16)
+        payload = {
+            "sub": identity[1],
+            "iat": now,
+            "exp": expires,
+            "jti": session_id,
+            "nonce": secrets.token_hex(8),
+        }
+        encoded = self._b64url_encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        )
+        signing_input = f"{_SESSION_VERSION}.{encoded}"
+        signature = hmac.new(
+            self.session_secret.encode("utf-8"),
+            signing_input.encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()
+        with self._sessions_lock:
+            self._sessions = {
+                sid: exp for sid, exp in self._sessions.items() if exp > now
+            }
+            self._sessions[session_id] = expires
+        return f"{signing_input}.{signature}", expires
+
+    def _session_payload(self, token: str | None) -> dict[str, Any] | None:
+        if not token:
+            return None
+        parts = token.split(".")
+        if len(parts) != 3 or parts[0] != _SESSION_VERSION:
+            return None
+        signing_input = f"{parts[0]}.{parts[1]}"
+        expected = hmac.new(
+            self.session_secret.encode("utf-8"),
+            signing_input.encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, parts[2]):
+            return None
+        try:
+            payload = json.loads(self._b64url_decode(parts[1]).decode("utf-8"))
+        except (ValueError, TypeError, UnicodeDecodeError, binascii.Error):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _revoke_session_token(self, token: str | None) -> None:
+        payload = self._session_payload(token)
+        if not payload:
+            return
+        session_id = str(payload.get("jti", "")).strip()
+        if not session_id:
+            return
+        with self._sessions_lock:
+            self._sessions.pop(session_id, None)
+
+    def _verify_session_token(
+        self, token: str | None
+    ) -> tuple[tuple[str, str, str], int] | None:
+        payload = self._session_payload(token)
+        if payload is None:
+            return None
+        try:
+            expires = int(payload.get("exp", 0))
+        except (TypeError, ValueError):
+            return None
+        now = int(time.time())
+        if expires <= now:
+            return None
+        session_id = str(payload.get("jti", "")).strip()
+        if not session_id:
+            return None
+        with self._sessions_lock:
+            stored_expiry = self._sessions.get(session_id)
+            if stored_expiry is None or stored_expiry <= now:
+                return None
+        subject = str(payload.get("sub", "")).strip()
+        if not subject:
+            return None
+        if subject == "env-admin":
+            if not self.api_key:
+                return None
+            return ("admin", "env-admin", "env:TRELLIS_API_KEY"), expires
+        record = self.key_store.find_active(subject)
+        if not record or record.get("role") != "admin":
+            return None
+        expires_at = _parse_utc(record.get("expires_at"))
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            return None
+        return (
+            str(record.get("role", "admin")),
+            str(record.get("key_id", subject)),
+            str(record.get("label", "unknown")),
+        ), expires
+
+    def _read_session(
+        self, cookie_header: str | None
+    ) -> tuple[tuple[str, str, str], int] | None:
+        token = self._cookie_value(cookie_header, self.session_cookie_name)
+        return self._verify_session_token(token)
+
+    def _session_cookie_header(self, token: str, max_age: int) -> str:
+        parts = [
+            f"{self.session_cookie_name}={token}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            f"Max-Age={max_age}",
+        ]
+        if self.secure_cookies:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _clear_session_cookie_header(self) -> str:
+        parts = [
+            f"{self.session_cookie_name}=",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+            "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        ]
+        if self.secure_cookies:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _csrf_ok(self, headers: dict[str, str], auth_source: str | None) -> bool:
+        if auth_source != "cookie":
+            return True
+        if (headers.get(_CSRF_HEADER) or "").strip() != "1":
+            return False
+        origin = (headers.get("origin") or "").strip()
+        if not origin:
+            return True
+        host = (headers.get("host") or f"{self.host}:{self.port}").strip()
+        scheme = (headers.get("x-forwarded-proto") or self.scheme).strip().lower()
+        return origin.rstrip("/") == f"{scheme}://{host}"
 
     def _record_key_usage(self, identity: tuple[str, str, str], clean_path: str) -> None:
         role, key_id, label = identity
@@ -693,24 +883,143 @@ class TrellisHTTPServer:
                 },
             )
 
+        if method == "GET" and clean_path == "/favicon.ico":
+            return (
+                200,
+                {
+                    "Content-Type": "image/x-icon",
+                    "Content-Length": str(len(FAVICON_ICO)),
+                    "Cache-Control": "public, max-age=86400",
+                    "X-Content-Type-Options": "nosniff",
+                },
+                FAVICON_ICO,
+            )
+
         if method == "GET" and clean_path in ("/admin", "/admin/dashboard"):
-            raw = DASHBOARD_HTML.encode("utf-8")
+            nonce = secrets.token_urlsafe(16)
+            raw = DASHBOARD_HTML.replace("__NONCE__", nonce).encode("utf-8")
             return (
                 200,
                 {
                     "Content-Type": "text/html; charset=utf-8",
                     "Content-Length": str(len(raw)),
                     "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Frame-Options": "DENY",
+                    "Referrer-Policy": "no-referrer",
+                    "Cross-Origin-Opener-Policy": "same-origin",
+                    "Cross-Origin-Resource-Policy": "same-origin",
+                    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
                     "Content-Security-Policy": (
-                        "default-src 'none'; script-src 'unsafe-inline'; "
-                        "style-src 'unsafe-inline'; connect-src 'self'"
+                        f"default-src 'none'; script-src 'nonce-{nonce}'; "
+                        f"style-src 'nonce-{nonce}'; img-src 'self'; connect-src 'self'; "
+                        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
                     ),
                 },
                 raw,
             )
 
+        if clean_path == "/admin/session":
+            cookie_hdr = norm_headers.get("cookie")
+            if method == "GET":
+                session = self._read_session(cookie_hdr)
+                if session is None:
+                    return _json_resp(
+                        200,
+                        {"authenticated": False},
+                        extra_headers={
+                            "Cache-Control": "no-store",
+                            "Set-Cookie": self._clear_session_cookie_header(),
+                        },
+                    )
+                identity, expires = session
+                expires_at = datetime.fromtimestamp(
+                    expires, timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                return _json_resp(
+                    200,
+                    {
+                        "authenticated": True,
+                        "role": identity[0],
+                        "key_id": identity[1],
+                        "label": identity[2],
+                        "expires_at": expires_at,
+                    },
+                    extra_headers={"Cache-Control": "no-store"},
+                )
+            if method == "POST":
+                try:
+                    req_data = json.loads(body.decode("utf-8") if body else "{}")
+                except json.JSONDecodeError as exc:
+                    return _json_resp(400, {"error": f"Invalid JSON body: {exc}"})
+                candidate = str(req_data.get("api_key", "")).strip()
+                identity = self._authenticate_token(candidate)
+                if identity is None:
+                    return _json_resp(
+                        401,
+                        {
+                            "error": "Unauthorized",
+                            "message": "Invalid administrator API key.",
+                        },
+                        extra_headers={
+                            "WWW-Authenticate": 'Bearer realm="trellis-mcp"'
+                        },
+                    )
+                if identity[0] != "admin":
+                    return _json_resp(
+                        403,
+                        {
+                            "error": "Forbidden",
+                            "message": "Administrator API key required for dashboard access.",
+                        },
+                    )
+                token, expires = self._create_session_token(identity)
+                max_age = max(1, expires - int(time.time()))
+                expires_at = datetime.fromtimestamp(
+                    expires, timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                self._record_key_usage(identity, clean_path)
+                return _json_resp(
+                    200,
+                    {
+                        "status": "authenticated",
+                        "role": identity[0],
+                        "key_id": identity[1],
+                        "label": identity[2],
+                        "expires_at": expires_at,
+                    },
+                    extra_headers={
+                        "Cache-Control": "no-store",
+                        "Set-Cookie": self._session_cookie_header(token, max_age),
+                    },
+                )
+            if method == "DELETE":
+                session_token = self._cookie_value(
+                    cookie_hdr, self.session_cookie_name
+                )
+                self._revoke_session_token(session_token)
+                return _json_resp(
+                    200,
+                    {"status": "signed_out"},
+                    extra_headers={
+                        "Cache-Control": "no-store",
+                        "Set-Cookie": self._clear_session_cookie_header(),
+                    },
+                )
+            return _json_resp(
+                405, {"error": f"Method not allowed on /admin/session: {method}"}
+            )
+
         auth_hdr = norm_headers.get("authorization")
-        identity = self._authenticate_identity(auth_hdr)
+        cookie_hdr = norm_headers.get("cookie")
+        allow_cookie = (
+            clean_path == "/metrics"
+            or clean_path == "/admin/keys"
+            or clean_path.startswith("/admin/keys/")
+        )
+        identity, auth_source = self._authenticate_request(
+            auth_hdr, cookie_hdr, allow_cookie=allow_cookie
+        )
         role = identity[0] if identity else None
         if role is None:
             return _json_resp(
@@ -818,6 +1127,16 @@ class TrellisHTTPServer:
                         "message": "Administrator API key required for /admin/keys endpoints ([REQ-MCP-08-03]).",
                     },
                 )
+            if method in ("POST", "DELETE", "PATCH") and not self._csrf_ok(
+                norm_headers, auth_source
+            ):
+                return _json_resp(
+                    403,
+                    {
+                        "error": "Forbidden",
+                        "message": "Missing or invalid X-Trellis-CSRF header for cookie-authenticated requests.",
+                    },
+                )
             host_hdr = norm_headers.get("host") or f"{self.host}:{self.port}"
             scheme = norm_headers.get("x-forwarded-proto", "http")
             public_base = f"{scheme}://{host_hdr}"
@@ -841,6 +1160,28 @@ class TrellisHTTPServer:
                 )
                 created["mcp_endpoint"] = f"{public_base}/mcp"
                 return _json_resp(201, created)
+
+            if method == "PATCH":
+                target_id = clean_path[len("/admin/keys/") :].strip() if clean_path.startswith("/admin/keys/") else ""
+                if not target_id:
+                    return _json_resp(400, {"error": "Key ID required for update"})
+                try:
+                    req_data = json.loads(body.decode("utf-8") if body else "{}")
+                except json.JSONDecodeError as exc:
+                    return _json_resp(400, {"error": f"Invalid JSON body: {exc}"})
+                if "label" not in req_data and "role" not in req_data:
+                    return _json_resp(400, {"error": "Provide label and/or role to update"})
+                try:
+                    updated = self.key_store.update_key(
+                        target_id,
+                        label=req_data.get("label") if "label" in req_data else None,
+                        role=req_data.get("role") if "role" in req_data else None,
+                    )
+                except ValueError as exc:
+                    return _json_resp(400, {"error": str(exc)})
+                if updated is None:
+                    return _json_resp(404, {"error": f"Key not found: {target_id}"})
+                return _json_resp(200, {"status": "updated", "key": updated})
 
             if method == "DELETE":
                 target_id = clean_path[len("/admin/keys/") :].strip() if clean_path.startswith("/admin/keys/") else ""

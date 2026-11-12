@@ -127,7 +127,7 @@ python -m trellis_mcp --usage-report --budget-tokens 2000000
 ### Multi-IDE Configuration & P3 Extras
 
 - **Editors:** Generate MCP config for VS Code, JetBrains, Cursor, Windsurf, or Claude with `--emit-config` (see [IDE Integration Matrix](./docs/integrations/ide-matrix.md)).
-- **Key dashboard:** Browse to `http://<host>:<port>/admin/dashboard` and paste an admin key to list/generate/revoke from the browser.
+- **Key dashboard:** Browse to `http://<host>:<port>/admin/dashboard` and sign in with an admin key. The server exchanges it for a short-lived, signed HttpOnly session cookie (15 min, `SameSite=Strict`, CSRF-protected); the raw key is never stored in browser storage.
 - **Versioned standards:** Request a historical snapshot with `trellis_get_standard {"name": "...", "version": "0.1"}`; populate the offline cache with `--sync-cache`.
 - **Provenance:** `trellis_get_standard` returns SHA-256/HMAC metadata; `trellis_verify` checks a hash or signature before trusting a standard.
 - **Cost/quota analytics:** `--usage-report` summarizes `.trellis_usage.json` and flags `WARN`/`EXCEEDED` budgets.
