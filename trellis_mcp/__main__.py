@@ -9,7 +9,14 @@ import sys
 from pathlib import Path
 
 from trellis_mcp import __version__
-from trellis_mcp.http_server import TrellisHTTPServer, TrellisKeyStore
+from trellis_mcp.http_server import (
+    DEFAULT_MAX_BODY_BYTES,
+    DEFAULT_RATE_LIMIT,
+    DEFAULT_RATE_WINDOW_SEC,
+    DEFAULT_REQUEST_TIMEOUT_SEC,
+    TrellisHTTPServer,
+    TrellisKeyStore,
+)
 from trellis_mcp.installer import build_pyz_bundle, install_global, install_remote, sync_workspace
 from trellis_mcp.server import TrellisMCPServer
 from trellis_mcp.tools import PACKAGE_ROOT, tool_trellis_doctor
@@ -96,6 +103,61 @@ def main(argv: list[str] | None = None) -> int:
         help="Role for --generate-key: 'member' (default, MCP/bundle access) or 'admin' (can also issue/revoke keys).",
     )
     parser.add_argument(
+        "--expires-days",
+        type=float,
+        default=None,
+        help="Optional key lifetime in days for --generate-key / --rotate-key (e.g. 90).",
+    )
+    parser.add_argument(
+        "--rotate-key",
+        metavar="KEY_ID_OR_LABEL",
+        type=str,
+        default=None,
+        help="Atomically revoke an existing key and issue a replacement with the same role ([REQ-MCP-08-04]).",
+    )
+    parser.add_argument(
+        "--tls-cert",
+        type=Path,
+        default=os.environ.get("TRELLIS_TLS_CERT") or None,
+        help="Path to a PEM TLS certificate to serve HTTPS (requires --tls-key or TRELLIS_TLS_KEY).",
+    )
+    parser.add_argument(
+        "--tls-key",
+        type=Path,
+        default=os.environ.get("TRELLIS_TLS_KEY") or None,
+        help="Path to the PEM private key for --tls-cert.",
+    )
+    parser.add_argument(
+        "--bundle-signing-key",
+        type=str,
+        default=None,
+        help="Optional HMAC key used to sign /bundle.json and /install.sh responses (or TRELLIS_BUNDLE_SIGNING_KEY).",
+    )
+    parser.add_argument(
+        "--max-body-bytes",
+        type=int,
+        default=DEFAULT_MAX_BODY_BYTES,
+        help=f"Maximum accepted HTTP request body size in bytes (default: {DEFAULT_MAX_BODY_BYTES}).",
+    )
+    parser.add_argument(
+        "--rate-limit",
+        type=int,
+        default=DEFAULT_RATE_LIMIT,
+        help=f"Max requests per client per window (default: {DEFAULT_RATE_LIMIT}; 0 disables).",
+    )
+    parser.add_argument(
+        "--rate-window-sec",
+        type=float,
+        default=DEFAULT_RATE_WINDOW_SEC,
+        help=f"Rate-limit window in seconds (default: {DEFAULT_RATE_WINDOW_SEC}).",
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT_SEC,
+        help=f"Per-connection socket timeout in seconds (default: {DEFAULT_REQUEST_TIMEOUT_SEC}).",
+    )
+    parser.add_argument(
         "--list-keys",
         action="store_true",
         help="List all issued API keys (masked prefixes, labels, roles, status) ([REQ-MCP-08-04]).",
@@ -140,9 +202,27 @@ def main(argv: list[str] | None = None) -> int:
         print(build_pyz_bundle(repo_root=root, output_path=Path(args.build_pyz)))
         return 0
 
+    if args.rotate_key:
+        store = TrellisKeyStore(resolved_keys_file)
+        existing = store.find_active(args.rotate_key)
+        if existing is None:
+            print(f"Error: Active key not found for '{args.rotate_key}'.", file=sys.stderr)
+            return 1
+        store.revoke_key(args.rotate_key)
+        created = store.generate_key(
+            label=str(existing.get("label") or args.rotate_key),
+            role=str(existing.get("role") or "member"),
+            expires_days=args.expires_days,
+        )
+        created["rotated_from"] = existing.get("key_id")
+        print(json.dumps(created, indent=2))
+        return 0
+
     if args.generate_key:
         store = TrellisKeyStore(resolved_keys_file)
-        created = store.generate_key(label=args.generate_key, role=args.role)
+        created = store.generate_key(
+            label=args.generate_key, role=args.role, expires_days=args.expires_days
+        )
         print(json.dumps(created, indent=2))
         return 0
 
@@ -169,7 +249,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.install_remote:
-        print(install_remote(server_url=args.install_remote, api_key=args.api_key))
+        print(
+            install_remote(
+                server_url=args.install_remote,
+                api_key=args.api_key,
+                signing_key=args.bundle_signing_key,
+            )
+        )
         return 0
 
     if args.serve_http:
@@ -180,6 +266,13 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=root,
             auto_generate_key=args.auto_generate_key,
             keys_file=resolved_keys_file,
+            tls_cert=args.tls_cert,
+            tls_key=args.tls_key,
+            bundle_signing_key=args.bundle_signing_key,
+            max_body_bytes=args.max_body_bytes,
+            rate_limit=args.rate_limit,
+            rate_window_sec=args.rate_window_sec,
+            request_timeout_sec=args.request_timeout,
         )
         http_srv.serve_forever()
         return 0

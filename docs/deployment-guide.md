@@ -94,11 +94,11 @@ flowchart LR
   *(Note: Steps 1–3 can all be run with a single command: `.\scripts\build-and-deploy.ps1`)*
 
 - [ ] **4. Deploy `dist\trellis-mcp.pyz` to Windows VM (`<vm-ip>`):**
-  - **Option A — Zero-WinRM HTTP Hot-Deploy over Port 8080 (`POST /admin/deploy`, Recommended):**
-    ```powershell
-    .\scripts\build-and-deploy.ps1 -VmHost <vm-ip> -ApiKey "<YOUR_ADMIN_API_KEY>"
-    ```
-    *Uploads `dist\trellis-mcp.pyz` directly over HTTP port `8080` using your `trl_admin_...` key and hot-reloads the server in memory—no WinRM or `TrustedHosts` required.*
+   - **Option A — Zero-WinRM HTTP Hot-Deploy over Port 8080 (`POST /admin/deploy`, Recommended):**
+     ```powershell
+     .\scripts\build-and-deploy.ps1 -VmHost <vm-ip> -ApiKey "<YOUR_ADMIN_API_KEY>"
+     ```
+     *Uploads `dist\trellis-mcp.pyz` directly over HTTP port `8080` using your `trl_admin_...` key and hot-reloads the server in memory—no WinRM or `TrustedHosts` required. The script signs the payload with `X-Trellis-Signature: HMAC-SHA256(pyz_bytes, admin_key)`; unsigned uploads are rejected with `400` and invalid signatures with `403`.*
   - **Option B — Automated via WinRM (Auto-Configures `TrustedHosts`):**
     ```powershell
     .\scripts\build-and-deploy.ps1 -VmHost <vm-ip> -VmUser "<domain>\<vm-user>"

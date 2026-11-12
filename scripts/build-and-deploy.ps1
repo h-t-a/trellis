@@ -77,9 +77,18 @@ try {
     # Mode A: Zero-WinRM HTTP Hot-Deploy via POST /admin/deploy
     if (-not [string]::IsNullOrWhiteSpace($ResolvedKey)) {
         Write-Host "`n==> [Step 5/5] Deploying $PyzPath to http://${VmHost}:${Port}/admin/deploy via Admin Bearer Key..." -ForegroundColor Cyan
-        $Headers = @{ Authorization = "Bearer $ResolvedKey" }
+        # Sign the bundle bytes with HMAC-SHA256 using the admin Bearer token (P0 hardening).
+        $PyzBytes = [System.IO.File]::ReadAllBytes($PyzPath)
+        $Hmac = [System.Security.Cryptography.HMACSHA256]::new()
+        $Hmac.Key = [System.Text.Encoding]::UTF8.GetBytes($ResolvedKey)
+        $Signature = ([System.BitConverter]::ToString($Hmac.ComputeHash($PyzBytes))).Replace("-", "").ToLowerInvariant()
+        $Hmac.Dispose()
+        $Headers = @{
+            Authorization      = "Bearer $ResolvedKey"
+            "X-Trellis-Signature" = $Signature
+        }
         $DeployResp = Invoke-RestMethod -Uri "http://${VmHost}:${Port}/admin/deploy" `
-            -Method Post -InFile $PyzPath -ContentType "application/octet-stream" `
+            -Method Post -Body $PyzBytes -ContentType "application/octet-stream" `
             -Headers $Headers -TimeoutSec 20
         Write-Host "    HTTP Hot-Deploy Result: $($DeployResp | ConvertTo-Json -Compress)" -ForegroundColor Green
         return

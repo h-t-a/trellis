@@ -12,6 +12,8 @@ Supports:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -231,6 +233,7 @@ def install_remote(
     server_url: str,
     api_key: str | None = None,
     home_dir: Path | None = None,
+    signing_key: str | None = None,
 ) -> str:
     """Zero-clone client installer: fetches `/bundle.json` from a remote VM and configures MCP + skills ([REQ-MCP-07])."""
     base = server_url.rstrip("/")
@@ -240,6 +243,9 @@ def install_remote(
     bundle_endpoint = f"{base}/bundle.json"
 
     resolved_key = (api_key or os.environ.get("TRELLIS_API_KEY", "")).strip()
+    resolved_signing_key = (
+        signing_key if signing_key is not None else os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY", "")
+    ).strip() or None
     headers: dict[str, str] = {"Accept": "application/json"}
     if resolved_key:
         headers["Authorization"] = f"Bearer {resolved_key}"
@@ -248,7 +254,23 @@ def install_remote(
     from trellis_mcp.http_server import open_url_resilient
 
     with open_url_resilient(req, timeout=15) as resp:
-        bundle = json.loads(resp.read().decode("utf-8"))
+        raw = resp.read()
+        provided_sig = resp.headers.get("X-Trellis-Bundle-Signature")
+        if provided_sig is None and isinstance(resp.headers, dict):
+            provided_sig = resp.headers.get("x-trellis-bundle-signature")
+        if resolved_signing_key:
+            if not provided_sig:
+                raise ValueError(
+                    "Bundle signature missing but TRELLIS_BUNDLE_SIGNING_KEY is configured; refusing install."
+                )
+            expected_sig = hmac.new(
+                resolved_signing_key.encode("utf-8"), raw, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(expected_sig, str(provided_sig).strip().lower()):
+                raise ValueError(
+                    "Bundle signature verification failed (possible MITM or tampered server); refusing install."
+                )
+        bundle = json.loads(raw.decode("utf-8"))
 
     home = (home_dir or Path.home()).resolve()
     plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
@@ -317,15 +339,24 @@ if [ -z "${{TRELLIS_API_KEY:-}}" ]; then
 fi
 
 python3 - "{clean_base}" <<'PYEOF'
-import json, os, sys
+import hashlib, hmac, json, os, sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 base = sys.argv[1].rstrip("/")
 key = os.environ["TRELLIS_API_KEY"].strip()
+signing_key = os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY", "").strip()
 req = Request(f"{{base}}/bundle.json", headers={{"Authorization": f"Bearer {{key}}", "Accept": "application/json"}})
 with urlopen(req, timeout=15) as resp:
-    bundle = json.loads(resp.read().decode("utf-8"))
+    raw = resp.read()
+    provided_sig = resp.headers.get("X-Trellis-Bundle-Signature", "")
+    if signing_key:
+        if not provided_sig:
+            sys.exit("Error: bundle signature missing from server response; refusing install.")
+        expected = hmac.new(signing_key.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, provided_sig.strip().lower()):
+            sys.exit("Error: bundle signature verification failed (possible tampering); refusing install.")
+    bundle = json.loads(raw.decode("utf-8"))
 
 home = Path.home()
 plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"

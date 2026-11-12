@@ -9,6 +9,8 @@ Verifies requirements:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import io
 import json
 import tempfile
@@ -519,12 +521,17 @@ class TestTrellisMCPServer(unittest.TestCase):
             ) as http_srv:
                 base_url = http_srv.base_url
                 admin_key = http_srv.api_key
+                deploy_bytes = pyz_path.read_bytes()
+                deploy_sig = hmac.new(
+                    admin_key.encode("utf-8"), deploy_bytes, hashlib.sha256
+                ).hexdigest()
                 deploy_req = Request(
                     f"{base_url}/admin/deploy",
-                    data=pyz_path.read_bytes(),
+                    data=deploy_bytes,
                     headers={
                         "Content-Type": "application/octet-stream",
                         "Authorization": f"Bearer {admin_key}",
+                        "X-Trellis-Signature": deploy_sig,
                     },
                     method="POST",
                 )
@@ -533,6 +540,131 @@ class TestTrellisMCPServer(unittest.TestCase):
                     deploy_data = json.loads(deploy_resp.read().decode("utf-8"))
                     self.assertEqual(deploy_data["status"], "deployed")
                     self.assertTrue((target_workspace / "trellis-mcp.pyz").exists())
+
+
+    def test_req_mcp_10_keys_hashed_at_rest_expiry_and_rotation(self) -> None:
+        """[REQ-MCP-08-05] Verify keys are hashed at rest, honor expiry, and rotate atomically."""
+        from trellis_mcp.__main__ import main
+        from trellis_mcp.http_server import TrellisKeyStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keys_file = Path(tmp) / ".trellis_keys.json"
+            store = TrellisKeyStore(keys_file)
+
+            created = store.generate_key(label="svc", role="member", expires_days=30)
+            raw_key = created["api_key"]
+            self.assertEqual(store.verify_token(raw_key), "member")
+            file_text = keys_file.read_text(encoding="utf-8")
+            self.assertNotIn(raw_key, file_text)
+            self.assertIn("token_hash", file_text)
+
+            expired = store.generate_key(label="old", role="member", expires_days=-1)
+            self.assertIsNone(store.verify_token(expired["api_key"]))
+
+            rc_rotate = main(["--rotate-key", "svc", "--keys-file", str(keys_file)])
+            self.assertEqual(rc_rotate, 0)
+            self.assertIsNone(store.verify_token(raw_key))
+
+    def test_req_mcp_10_http_hardening_body_and_rate_limits(self) -> None:
+        """[REQ-MCP-10] Verify max-body enforcement (413) and per-client rate limiting (429)."""
+        test_key = "team-secret-hardening"
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key=test_key,
+            workspace_root=self.repo_root,
+            max_body_bytes=64,
+            rate_limit=100,
+        ) as srv:
+            big_req = Request(
+                f"{srv.base_url}/mcp",
+                data=b"x" * 256,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {test_key}",
+                },
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as ctx_big:
+                srv.open_request(big_req)
+            self.assertEqual(ctx_big.exception.code, 413)
+            ctx_big.exception.close()
+
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key=test_key,
+            workspace_root=self.repo_root,
+            rate_limit=2,
+            rate_window_sec=60,
+        ) as srv:
+            payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode("utf-8")
+            codes = []
+            for _ in range(5):
+                req = Request(
+                    f"{srv.base_url}/mcp",
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {test_key}",
+                    },
+                    method="POST",
+                )
+                try:
+                    with srv.open_request(req) as resp:
+                        codes.append(resp.status)
+                except HTTPError as exc:
+                    codes.append(exc.code)
+                    exc.close()
+            self.assertIn(429, codes)
+            self.assertEqual(codes.count(200), 2)
+
+    def test_req_mcp_10_deploy_rejects_missing_or_invalid_signature(self) -> None:
+        """[REQ-MCP-10] Verify /admin/deploy refuses unsigned or incorrectly signed bundles."""
+        from trellis_mcp.__main__ import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            pyz_path = tmp_dir / "trellis-mcp.pyz"
+            self.assertEqual(main(["--build-pyz", str(pyz_path)]), 0)
+            deploy_bytes = pyz_path.read_bytes()
+
+            target_workspace = tmp_dir / "vm_runtime"
+            target_workspace.mkdir(parents=True, exist_ok=True)
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                auto_generate_key=True,
+                keys_file=target_workspace / ".trellis_keys.json",
+                workspace_root=target_workspace,
+            ) as srv:
+                admin_key = srv.api_key
+
+                def deploy(headers: dict[str, str]) -> int:
+                    req = Request(
+                        f"{srv.base_url}/admin/deploy",
+                        data=deploy_bytes,
+                        headers={
+                            "Content-Type": "application/octet-stream",
+                            "Authorization": f"Bearer {admin_key}",
+                            **headers,
+                        },
+                        method="POST",
+                    )
+                    try:
+                        with srv.open_request(req) as resp:
+                            return resp.status
+                    except HTTPError as exc:
+                        code = exc.code
+                        exc.close()
+                        return code
+
+                self.assertEqual(deploy({}), 400)
+                self.assertEqual(deploy({"X-Trellis-Signature": "deadbeef"}), 403)
+                good_sig = hmac.new(
+                    admin_key.encode("utf-8"), deploy_bytes, hashlib.sha256
+                ).hexdigest()
+                self.assertEqual(deploy({"X-Trellis-Signature": good_sig}), 200)
 
 
 if __name__ == "__main__":
