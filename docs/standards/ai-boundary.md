@@ -46,7 +46,7 @@ High-risk actions where AI agents must **never** execute changes or ingest sensi
 
 The following supporting policies must be researched and decided with the team before moving this standard from v0.1 `[DRAFT]` to v1.0:
 
-- [ ] **Data Classification Levels (`TODO [TO RESEARCH]`):** Define formal classification tiers (e.g., Public, Internal, Confidential, Restricted/PII/Financial) and map which tiers may be exposed to AI tools.
-- [ ] **Allowed MCP Servers Per Project (`TODO [TO RESEARCH]`):** Define an approved registry of MCP servers, their required read-only/least-privilege scopes, and the review process before enabling a server in `.mcp.json`.
+- [ ] **Data Classification Levels (`TODO [TO RESEARCH]`):** Define formal classification tiers (e.g., Public, Internal, Confidential, Restricted/PII/Financial) and map which tiers may be exposed to AI tools. Draft: [data-classification.md](./data-classification.md); enforcement: `trellis_classify` (`[REQ-P2-03]`).
+- [ ] **Allowed MCP Servers Per Project (`TODO [TO RESEARCH]`):** Define an approved registry of MCP servers, their required read-only/least-privilege scopes, and the review process before enabling a server in `.mcp.json`. Draft registry: [approved-mcp-servers.json](./approved-mcp-servers.json); enforcement: `trellis_mcp_registry` (`[REQ-P2-04]`).
 - [ ] **Approval Authority for Exceptions (`TODO [TO RESEARCH]`):** Define who can grant temporary exceptions to Tier 2 or Tier 3 boundaries and how exceptions expire.
 - [ ] **Audit Trail of AI Usage (`TODO [TO RESEARCH]`):** Define how AI-assisted plans, walkthroughs, and PR disclosures are archived for internal or regulatory audit.

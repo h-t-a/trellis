@@ -6,8 +6,17 @@ Each tool returns a standard MCP CallToolResult dictionary:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import importlib.util
+import json
+import os
 import re
+import shutil
+import subprocess
+import sys
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +98,13 @@ _COMMIT_CONVENTION_RE = re.compile(
     r"^(feat|fix|sec|audit|refactor|perf|build|ci|test|docs|style|chore)(\([a-z0-9_/-]+\))?: [a-z][^.]*$"
 )
 
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_PHONE_RE = re.compile(r"(?<!\d)(?:\+?\d{1,3}[ -]?)?(?:\(?\d{3}\)?[ -]?)\d{3}[ -]?\d{4}(?!\d)")
+_IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+_RESTRICTED_KEYWORDS = ("password", "passwd", "client_secret", "private key", "api_key", "apikey", "secret")
+_CONFIDENTIAL_KEYWORDS = ("customer", "pii", "salary", "balance", "ledger", "account number", "iban", "ssn", "national id")
+
 
 def _ok(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": False}
@@ -136,52 +152,413 @@ def list_bundled_skills(workspace_root: Path | None = None) -> dict[str, str]:
 
 
 def _resolve_root(workspace_root: Path | None) -> Path:
-    if workspace_root and (workspace_root / "docs" / "standards").exists():
+    if workspace_root:
         return workspace_root
     return PACKAGE_ROOT
+
+
+STANDARDS_MANIFEST = "docs/standards/standards.json"
+DEFAULT_STANDARD_VERSION = "0.1"
+CACHE_DIRNAME = ".trellis_cache"
+
+
+def _standard_manifest(root: Path) -> dict[str, dict[str, Any]]:
+    """Load `docs/standards/standards.json`, falling back to the built-in map."""
+    data: dict[str, Any] = {}
+    raw: str | None = None
+    if root.is_dir():
+        candidate = root / STANDARDS_MANIFEST
+        if candidate.is_file():
+            try:
+                raw = candidate.read_text(encoding="utf-8")
+            except OSError:
+                raw = None
+    else:
+        raw = read_bundled_text(STANDARDS_MANIFEST, workspace_root=root)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                data = parsed
+        except (ValueError, TypeError):
+            data = {}
+
+    standards = data.get("standards")
+    if isinstance(standards, dict) and standards:
+        return {str(name): entry for name, entry in standards.items() if isinstance(entry, dict)}
+
+    return {
+        name: {
+            "version": DEFAULT_STANDARD_VERSION,
+            "path": rel_path,
+            "versions": {DEFAULT_STANDARD_VERSION: rel_path},
+        }
+        for name, rel_path in STANDARD_FILE_MAP.items()
+    }
+
+
+def _standard_cache_dir(root: Path) -> Path:
+    base = root.parent if root.is_file() else root
+    return base / CACHE_DIRNAME / "standards"
+
+
+def _standard_signing_key(explicit: str | None = None) -> str | None:
+    return (
+        explicit
+        or os.environ.get("TRELLIS_STANDARD_SIGNING_KEY")
+        or os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY")
+        or None
+    )
+
+
+def _sign_text(text: str, key: str | None) -> str | None:
+    if not key:
+        return None
+    return hmac.new(key.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _write_standard_cache(cache_path: Path, content: str, digest: str) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(content, encoding="utf-8")
+        cache_path.with_suffix(".sha256").write_text(digest + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_standard(
+    name: str,
+    root: Path,
+    version: str | None = None,
+    offline: bool = False,
+) -> dict[str, Any]:
+    """Resolve a standard by name/version, preferring disk/bundle then the offline cache."""
+    manifest = _standard_manifest(root)
+    entry = manifest.get(name)
+    if not entry:
+        raise KeyError(
+            f"Unknown standard '{name}'. Available: {', '.join(sorted(manifest.keys()))}"
+        )
+
+    resolved_version = str(version).strip() if version else str(
+        entry.get("version") or DEFAULT_STANDARD_VERSION
+    )
+    versions = entry.get("versions") if isinstance(entry.get("versions"), dict) else {}
+    rel_path = versions.get(resolved_version)
+    if rel_path is None and resolved_version == str(entry.get("version")):
+        rel_path = entry.get("path")
+    if not rel_path:
+        available = ", ".join(sorted(versions.keys())) or str(entry.get("version"))
+        raise ValueError(
+            f"Version '{resolved_version}' not available for '{name}'. Available: {available}"
+        )
+
+    cache_path = _standard_cache_dir(root) / f"{name}@{resolved_version}.md"
+    content: str | None = None
+    source = "bundled"
+
+    if offline:
+        if cache_path.is_file():
+            content = cache_path.read_text(encoding="utf-8")
+            source = "cache"
+        else:
+            raise FileNotFoundError(
+                f"No offline cache for '{name}' version '{resolved_version}'. Run --sync-cache first."
+            )
+    else:
+        content = read_bundled_text(str(rel_path), workspace_root=root)
+        if content is None:
+            if cache_path.is_file():
+                content = cache_path.read_text(encoding="utf-8")
+                source = "cache"
+            else:
+                raise FileNotFoundError(f"Standard file not found: {rel_path}")
+
+    if content is None:
+        raise FileNotFoundError(f"Standard file not found: {rel_path}")
+
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    sidecar = cache_path.with_suffix(".sha256")
+    if source == "cache" and sidecar.is_file():
+        try:
+            expected_digest = sidecar.read_text(encoding="utf-8").strip()
+        except OSError:
+            expected_digest = ""
+        if expected_digest and not hmac.compare_digest(expected_digest, digest):
+            raise ValueError(
+                f"Offline cache integrity check failed for '{name}' version '{resolved_version}'."
+            )
+    if not offline:
+        _write_standard_cache(cache_path, content, digest)
+
+    return {
+        "content": content,
+        "path": str(rel_path),
+        "version": resolved_version,
+        "source": source,
+        "sha256": digest,
+    }
+
+
+def _standard_metadata(
+    name: str, loaded: dict[str, Any], signing_key: str | None = None
+) -> dict[str, Any]:
+    signature = _sign_text(loaded["content"], _standard_signing_key(signing_key))
+    return {
+        "name": name,
+        "version": loaded["version"],
+        "path": loaded["path"],
+        "source": loaded["source"],
+        "sha256": loaded["sha256"],
+        "signed": signature is not None,
+        "signature_alg": "HMAC-SHA256" if signature else None,
+        "signature": signature,
+    }
 
 
 def tool_trellis_get_standard(
     args: dict[str, Any], workspace_root: Path | None = None
 ) -> dict[str, Any]:
-    """Return the authoritative Trellis standard or template by name."""
+    """Return the authoritative Trellis standard or template by name and optional version."""
     name = str(args.get("name", "all")).strip().lower()
+    version = args.get("version")
+    offline = bool(args.get("offline", False))
     root = _resolve_root(workspace_root)
+    manifest = _standard_manifest(root)
 
     if name in ("all", "list", ""):
         lines = ["# Available Trellis Standards & Templates", ""]
-        for key, rel_path in STANDARD_FILE_MAP.items():
-            lines.append(f"- `{key}` -> `{rel_path}`")
+        for key in sorted(manifest.keys()):
+            entry = manifest[key]
+            versions = entry.get("versions") if isinstance(entry.get("versions"), dict) else {}
+            available = ", ".join(sorted(versions.keys())) or str(entry.get("version"))
+            lines.append(
+                f"- `{key}` v{entry.get('version')} (available: {available}) -> `{entry.get('path')}`"
+            )
+        lines.extend(
+            [
+                "",
+                "Tip: request a historical version with "
+                '`{"name": "<standard>", "version": "<x.y>"}`.',
+            ]
+        )
         return _ok("\n".join(lines))
 
-    rel_path = STANDARD_FILE_MAP.get(name)
-    if not rel_path:
+    if name not in manifest:
         return _err(
-            f"Unknown standard '{name}'. Available: {', '.join(sorted(STANDARD_FILE_MAP.keys()))}"
+            f"Unknown standard '{name}'. Available: {', '.join(sorted(manifest.keys()))}"
         )
 
-    content = read_bundled_text(rel_path, workspace_root=root)
-    if content is not None:
-        return _ok(content)
-    target = root / rel_path
-    if not target.exists():
-        target = PACKAGE_ROOT / rel_path
-    if not target.exists():
-        return _err(f"Standard file not found on disk: {rel_path}")
+    try:
+        loaded = _load_standard(name, root, version=str(version) if version else None, offline=offline)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        return _err(str(exc))
 
-    content = read_bundled_text(rel_path, workspace_root=root)
-    if content is None:
-        return _err(f"Standard file not found on disk: {rel_path}")
-
-    return _ok(content)
+    result = _ok(loaded["content"])
+    result["metadata"] = _standard_metadata(name, loaded)
+    return result
 
 
-def _scan_redaction_violations(text: str) -> list[str]:
+def tool_trellis_verify(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Verify the SHA-256 hash and optional HMAC signature of a retrieved standard ([REQ-P3-05])."""
+    name = str(args.get("name", "")).strip().lower()
+    if not name:
+        return _err("Provide the standard 'name' to verify.")
+    root = _resolve_root(workspace_root)
+    version = args.get("version")
+    signing_key = args.get("signing_key")
+
+    try:
+        loaded = _load_standard(name, root, version=str(version) if version else None)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        return _err(str(exc))
+
+    expected_sha = str(args.get("expected_sha256", "")).strip().lower() or None
+    expected_sig = str(args.get("expected_signature", "")).strip().lower() or None
+    actual_sig = _sign_text(loaded["content"], _standard_signing_key(signing_key))
+    checks: list[str] = []
+    ok = True
+
+    if expected_sha:
+        match = hmac.compare_digest(expected_sha, loaded["sha256"])
+        ok = ok and match
+        checks.append(f"sha256: {'MATCH' if match else 'MISMATCH'}")
+    if expected_sig:
+        if actual_sig is None:
+            ok = False
+            checks.append("signature: NO SIGNING KEY CONFIGURED")
+        else:
+            match = hmac.compare_digest(expected_sig, actual_sig)
+            ok = ok and match
+            checks.append(f"signature: {'MATCH' if match else 'MISMATCH'}")
+    if not expected_sha and not expected_sig:
+        checks.append("No expected hash/signature supplied; reporting computed provenance only.")
+
+    status = "VALID" if ok else "INVALID"
+    if not expected_sha and not expected_sig:
+        status = "HASHED"
+
+    lines = [
+        f"# Trellis Provenance Verification: {name}",
+        "",
+        f"- Status: **{status}**",
+        f"- Version: `{loaded['version']}`",
+        f"- Source: `{loaded['source']}`",
+        f"- SHA-256: `{loaded['sha256']}`",
+        f"- Signed: `{bool(actual_sig)}`"
+        + (f" (`HMAC-SHA256: {actual_sig}`)" if actual_sig else ""),
+        "",
+        "## Checks",
+        *[f"- {item}" for item in checks],
+    ]
+    result = _ok("\n".join(lines))
+    result["metadata"] = {
+        "name": name,
+        "version": loaded["version"],
+        "sha256": loaded["sha256"],
+        "signature": actual_sig,
+        "valid": ok,
+        "status": status,
+    }
+    if status == "INVALID":
+        result["isError"] = True
+    return result
+
+
+def tool_trellis_analytics(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Report token usage, cost, and quota utilization from a local usage ledger ([REQ-P3-04])."""
+    root = _resolve_root(workspace_root)
+    base = root.parent if root.is_file() else root
+    usage_arg = args.get("usage_file")
+    usage_path = (base / str(usage_arg)).resolve() if usage_arg else base / ".trellis_usage.json"
+    budget = int(args.get("budget_tokens") or 0)
+    rate = float(args.get("cost_per_1k_tokens") or 0.0)
+    period_days = args.get("period_days")
+
+    entries: list[dict[str, Any]] = []
+    if usage_path.is_file():
+        try:
+            raw = json.loads(usage_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                raw = raw.get("entries", [])
+            if isinstance(raw, list):
+                entries = [e for e in raw if isinstance(e, dict)]
+        except (OSError, ValueError):
+            return _err(f"Could not parse usage ledger: {usage_path.name}")
+
+    cutoff: datetime | None = None
+    if period_days:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=float(period_days))
+
+    per_key: dict[str, dict[str, Any]] = {}
+    per_tool: dict[str, int] = {}
+    total_in = total_out = 0
+    total_cost = 0.0
+
+    for entry in entries:
+        if cutoff is not None:
+            stamp = entry.get("timestamp")
+            try:
+                parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        tokens_in = int(entry.get("input_tokens") or 0)
+        tokens_out = int(entry.get("output_tokens") or 0)
+        tool = str(entry.get("tool") or "unknown")
+        label = str(entry.get("label") or entry.get("key_id") or "unattributed")
+        cost = entry.get("cost_usd")
+        if cost is None:
+            cost = ((tokens_in + tokens_out) / 1000.0) * rate
+        cost = float(cost)
+
+        total_in += tokens_in
+        total_out += tokens_out
+        total_cost += cost
+        bucket = per_key.setdefault(
+            label, {"requests": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        )
+        bucket["requests"] += 1
+        bucket["input_tokens"] += tokens_in
+        bucket["output_tokens"] += tokens_out
+        bucket["cost_usd"] += cost
+        per_tool[tool] = per_tool.get(tool, 0) + 1
+
+    used = total_in + total_out
+    utilization = (used / budget * 100.0) if budget > 0 else None
+    if budget and used >= budget:
+        verdict = "EXCEEDED"
+    elif utilization is not None and utilization >= 80.0:
+        verdict = "WARN"
+    else:
+        verdict = "OK"
+    if not usage_path.is_file():
+        verdict = "NO_DATA"
+
+    lines = [
+        "# Trellis Cost & Quota Analytics",
+        "",
+        f"- Ledger: `{usage_path}` ({'found' if usage_path.is_file() else 'missing'})",
+        f"- Entries: {len(entries)}",
+        f"- Total tokens: {used} (input {total_in} / output {total_out})",
+        f"- Estimated cost: ${total_cost:.4f}"
+        + (f" (@ ${rate:.4f}/1K tokens)" if rate else ""),
+        f"- Budget utilization: {f'{utilization:.1f}%' if utilization is not None else 'not configured'}",
+        f"- Verdict: **{verdict}**",
+    ]
+    if per_key:
+        lines.extend(["", "## Per Key / Team"])
+        for label, bucket in sorted(per_key.items()):
+            lines.append(
+                f"- `{label}`: {bucket['requests']} requests, "
+                f"{bucket['input_tokens'] + bucket['output_tokens']} tokens, "
+                f"${bucket['cost_usd']:.4f}"
+            )
+    if per_tool:
+        lines.extend(["", "## Per Tool"])
+        for tool, count in sorted(per_tool.items()):
+            lines.append(f"- `{tool}`: {count}")
+
+    result = _ok("\n".join(lines))
+    result["metadata"] = {
+        "entries": len(entries),
+        "total_tokens": used,
+        "cost_usd": round(total_cost, 6),
+        "budget_tokens": budget,
+        "utilization_pct": round(utilization, 2) if utilization is not None else None,
+        "verdict": verdict,
+    }
+    return result
+
+
+def _is_placeholder_value(value: str) -> bool:
+    lowered = value.lower()
+    if lowered.startswith("bearer "):
+        token = lowered[len("bearer ") :]
+        if token in ("auth", "token", "header", "key", "scheme", "bearer"):
+            return True
+        if len(token) < 16 and not any(ch.isdigit() for ch in token):
+            return True
+    return any(marker in value for marker in ("<", ">", "$", "{", "}", "...", "xxxx")) or any(
+        word in lowered for word in ("redacted", "example", "placeholder", "dummy", "your_", "api_key", "token")
+    )
+
+
+def _scan_redaction_violations(text: str, ignore_placeholders: bool = False) -> list[str]:
     violations: list[str] = []
-    if _PAN_PATTERN.search(text):
+    pan_match = _PAN_PATTERN.search(text)
+    if pan_match and not (ignore_placeholders and _is_placeholder_value(pan_match.group(0))):
         violations.append("Potential unredacted 13-19 digit PAN / card / account number")
     for pat in _SECRET_PATTERNS:
-        if pat.search(text):
+        match = pat.search(text)
+        if match and not (ignore_placeholders and _is_placeholder_value(match.group(0))):
             violations.append(f"Credential / secret token pattern matched (`{pat.pattern[:32]}...`)")
     return violations
 
@@ -548,6 +925,7 @@ def tool_trellis_doctor(
 ) -> dict[str, Any]:
     """Audit and optionally auto-fix workspace rules, skills, and line budgets (F01, F02, [REQ-MCP-07])."""
     auto_fix = bool(args.get("auto_fix", False))
+    dry_run = bool(args.get("dry_run", False))
     inline_files = args.get("files")
 
     findings: list[str] = []
@@ -616,7 +994,11 @@ def tool_trellis_doctor(
                 findings.append(
                     f"Missing YAML frontmatter in `.agents/rules/{rule_file.name}` (`F02` requires `trigger:` and `description:`)"
                 )
-                if auto_fix:
+                if auto_fix and dry_run:
+                    fixes_applied.append(
+                        f"Would fix YAML frontmatter in `.agents/rules/{rule_file.name}` (dry run, no write)"
+                    )
+                elif auto_fix:
                     fixed_content = (
                         "---\n"
                         "trigger: always_on\n"
@@ -636,7 +1018,11 @@ def tool_trellis_doctor(
             findings.append(
                 f"Deprecated `.agents/workflows/` files present ({names}) — Antigravity IDE uses `.agents/skills/<name>/SKILL.md` (`F01`)"
             )
-            if auto_fix:
+            if auto_fix and dry_run:
+                fixes_applied.append(
+                    f"Would remove {len(legacy_files)} deprecated `.agents/workflows/*.md` file(s) (dry run, no write)"
+                )
+            elif auto_fix:
                 for lf in legacy_files:
                     lf.unlink()
                 fixes_applied.append(f"Fixed: Removed {len(legacy_files)} deprecated `.agents/workflows/*.md` file(s)")
@@ -658,7 +1044,83 @@ def tool_trellis_doctor(
         if len(c_lines) >= 200:
             findings.append(f"`CLAUDE.md` is {len(c_lines)} lines (exceeds <200 line budget)")
 
-    status = "HEALTHY" if not findings or (auto_fix and fixes_applied) else "ISSUES_FOUND"
+    # 5. Validate JSON configuration files
+    for rel in (".mcp.json", ".agents/mcp_config.json", ".agents/skills.json", ".claude/settings.json"):
+        cfg_path = root / rel
+        if cfg_path.is_file():
+            try:
+                json.loads(cfg_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                findings.append(f"Invalid JSON in `{rel}`: {exc}")
+
+    # 6. Check Claude Code skill mirror parity
+    if skills_dir.exists():
+        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+            name = skill_md.parent.name
+            mirror = root / ".claude" / "skills" / name / "SKILL.md"
+            if not mirror.is_file():
+                findings.append(
+                    f"Skill `{name}` is not mirrored to `.claude/skills/{name}/SKILL.md`"
+                )
+
+    # 7. Detect broken relative Markdown links
+    link_re = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+    md_files: list[Path] = []
+    for pattern in ("README.md", "CLAUDE.md", "docs/**/*.md", "templates/*.md", ".agents/**/*.md", ".claude/**/*.md"):
+        md_files.extend(root.glob(pattern))
+    checked_links: set[str] = set()
+    for md_path in sorted(set(md_files)):
+        if not md_path.is_file():
+            continue
+        try:
+            md_text = md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for raw_target in link_re.findall(md_text):
+            target = raw_target.split("#", 1)[0].strip()
+            if not target or target.startswith(("http://", "https://", "mailto:", "#", "@", "<")):
+                continue
+            if "{" in target or "}" in target:
+                continue
+            resolved = (md_path.parent / target).resolve()
+            key = f"{md_path.as_posix()}::{target}"
+            if key in checked_links:
+                continue
+            checked_links.add(key)
+            if not resolved.exists():
+                findings.append(
+                    f"Broken relative link in `{md_path.relative_to(root).as_posix()}` -> `{target}`"
+                )
+
+    # 8. Informational DRAFT/TODO markers (never affects status)
+    marker_lines: list[str] = []
+    marker_files = [root / "CLAUDE.md", *sorted((root / "docs" / "standards").glob("*.md"))]
+    for md_path in marker_files:
+        if not md_path.is_file():
+            continue
+        try:
+            md_text = md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        drafts = len(re.findall(r"\[DRAFT\]", md_text))
+        todos = len(re.findall(r"\bTODO\b", md_text))
+        if drafts or todos:
+            marker_lines.append(
+                f"- `{md_path.relative_to(root).as_posix()}`: {drafts} `[DRAFT]`, {todos} `TODO`"
+            )
+    markers_text = "\n".join(marker_lines) if marker_lines else "- None"
+    markers_hint = (
+        "- Human sign-off is required before finalizing `[DRAFT]` standards (`Tier 3`)."
+        if marker_lines
+        else "- No draft markers detected."
+    )
+
+    if dry_run and fixes_applied:
+        status = "DRY_RUN"
+    elif not findings or (auto_fix and not dry_run and fixes_applied):
+        status = "HEALTHY"
+    else:
+        status = "ISSUES_FOUND"
     findings_text = "\n".join(f"- {f}" for f in findings) if findings else "- Zero configuration issues detected."
     fixes_text = "\n".join(f"- {fx}" for fx in fixes_applied) if fixes_applied else "- None"
 
@@ -667,12 +1129,457 @@ def tool_trellis_doctor(
 
 - **Workspace:** `{root}`
 - **Status:** **{status}**
+- **Dry Run:** `{dry_run and auto_fix}`
 
 ## Findings
 {findings_text}
 
 ## Auto-Fixes Applied
 {fixes_text}
+
+## Draft & TODO Markers (informational)
+{markers_text}
+{markers_hint}
+"""
+    )
+
+
+def _slugify(text: str, limit: int = 40) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return (slug or "case")[:limit]
+
+
+def _workspace_root(workspace_root: Path | None) -> Path:
+    return (workspace_root or PACKAGE_ROOT).resolve()
+
+
+def tool_trellis_test(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Generate failing REQ-linked test skeletons for Python/TS/Java/C# ([REQ-P2-01])."""
+    spec_id = str(args.get("spec_id", "SPEC-001")).strip().upper()
+    title = str(args.get("title", "Untitled requirement")).strip()
+    requirements: list[str] = list(args.get("requirements") or ["Define testable requirement"])
+    language = str(args.get("language", "python")).strip().lower()
+    test_file = str(args.get("test_file", "") or "").strip()
+
+    digits = re.search(r"(\d+)", spec_id)
+    spec_num = digits.group(1).zfill(3) if digits else "001"
+    safe_title = title.replace('"""', "'''")
+
+    req_ids: list[str] = []
+    if language in ("python", "py", "unittest"):
+        lines = [
+            f'"""Red-phase tests for {spec_id}: {safe_title}',
+            "",
+            "Generated by trellis_test. Every test below MUST fail until the",
+            "requirement is implemented (Red -> Green discipline).",
+            '"""',
+            "from __future__ import annotations",
+            "",
+            "import unittest",
+            "",
+            "",
+            f"class TestSpec{spec_num}(unittest.TestCase):",
+        ]
+        for idx, req in enumerate(requirements, start=1):
+            req_id = f"REQ-{spec_num}-{idx:02d}"
+            req_ids.append(req_id)
+            method = f"test_{req_id.lower().replace('-', '_')}_{_slugify(str(req))}"
+            lines += [
+                f"    def {method}(self) -> None:",
+                f'        """[{req_id}] {str(req).replace(chr(34) * 3, chr(39) * 3)}"""',
+                "        # Given:",
+                "        ...",
+                "        # When:",
+                "        ...",
+                "        # Then:",
+                f'        self.fail("[{req_id}] not implemented yet (expected RED phase)")',
+                "",
+            ]
+        code = "\n".join(lines)
+    elif language in ("typescript", "ts", "javascript", "js", "jest"):
+        lines = [
+            f"// Red-phase tests for {spec_id}: {title}",
+            f'describe("{spec_id}: {title}", () => {{',
+        ]
+        for idx, req in enumerate(requirements, start=1):
+            req_id = f"REQ-{spec_num}-{idx:02d}"
+            req_ids.append(req_id)
+            lines += [
+                f'  test("[{req_id}] {req}", () => {{',
+                "    // Given / When / Then",
+                "    // RED: replace with a real assertion once implemented.",
+                "    expect(true).toBe(false);",
+                "  });",
+                "",
+            ]
+        lines.append("});")
+        code = "\n".join(lines)
+    elif language in ("java", "junit", "junit5"):
+        lines = [
+            "import static org.junit.jupiter.api.Assertions.fail;",
+            "",
+            "import org.junit.jupiter.api.Test;",
+            "",
+            f"class Spec{spec_num}Test {{",
+        ]
+        for idx, req in enumerate(requirements, start=1):
+            req_id = f"REQ-{spec_num}-{idx:02d}"
+            req_ids.append(req_id)
+            method = f"req{spec_num}_{idx:02d}_{_slugify(str(req), 28)}"
+            lines += [
+                "    @Test",
+                f"    void {method}() {{",
+                f'        fail("[{req_id}] not implemented yet (expected RED phase)");',
+                "    }",
+                "",
+            ]
+        lines.append("}")
+        code = "\n".join(lines)
+    elif language in ("csharp", "cs", "c#", "xunit"):
+        lines = [
+            "using Xunit;",
+            "",
+            f"public class Spec{spec_num}Tests",
+            "{",
+        ]
+        for idx, req in enumerate(requirements, start=1):
+            req_id = f"REQ-{spec_num}-{idx:02d}"
+            req_ids.append(req_id)
+            method = f"Req{spec_num}_{idx:02d}_{_slugify(str(req), 28)}"
+            lines += [
+                "    [Fact]",
+                f"    public void {method}()",
+                "    {",
+                f'        Assert.Fail("[{req_id}] not implemented yet (expected RED phase)");',
+                "    }",
+                "",
+            ]
+        lines.append("}")
+        code = "\n".join(lines)
+    else:
+        return _err(
+            f"Unsupported language '{language}'. Supported: python, typescript, java, csharp."
+        )
+
+    file_hint = f"\n- **Suggested Test File:** `{test_file}`" if test_file else ""
+    return _ok(
+        f"""# Trellis Failing Test Skeleton (`[REQ-P2-01]`)
+
+- **Spec:** `{spec_id}` — {title}
+- **Language:** `{language}`
+- **Requirements:** {", ".join(f"`[{r}]`" for r in req_ids)}
+- **Red-Phase Guarantee:** Every generated test deliberately fails until implemented.{file_hint}
+
+## Generated Skeleton
+
+```{language}
+{code}
+```
+
+## Next Steps
+1. Save the skeleton to the suggested test file.
+2. Run it and confirm it **fails** for the right reason (Red).
+3. Implement the minimal change, then make the test pass (Green).
+4. Do not delete or skip the test to force a green build (`Tier 3` prohibition).
+"""
+    )
+
+
+def _iter_workspace_text_files(
+    root: Path,
+    max_files: int = 500,
+    max_bytes: int = 500_000,
+    exclude: list[str] | None = None,
+) -> list[tuple[str, str]]:
+    """Collect readable UTF-8 text files under `root`, skipping binary/build directories."""
+    skip_dirs = {".git", "node_modules", "dist", "build", "__pycache__", ".venv", "venv", ".idea", ".vscode"}
+    excludes = [e.strip().strip("/") for e in (exclude or []) if e.strip()]
+    files: list[tuple[str, str]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if any(rel == ex or rel.startswith(ex + "/") for ex in excludes):
+            continue
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        try:
+            if path.stat().st_size > max_bytes:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "\x00" in text:
+            continue
+        files.append((rel, text))
+        if len(files) >= max_files:
+            break
+    return files
+
+
+def tool_trellis_scan(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Run secret scanning and optional dependency vulnerability scanning ([REQ-P2-02])."""
+    root = _workspace_root(workspace_root)
+    rel_path = str(args.get("path", ".") or ".").strip()
+    target = (root / rel_path).resolve()
+    if not str(target).startswith(str(root)):
+        return _err("`path` must stay within the workspace root.")
+    if not target.exists():
+        return _err(f"Scan path does not exist: {rel_path}")
+
+    exclude = list(
+        args.get("exclude")
+        or ["tests/", "test/", "dist/", "node_modules/", "__pycache__/", ".git/"]
+    )
+    max_files = int(args.get("max_files", 500))
+    scan_secrets = bool(args.get("scan_secrets", True))
+    scan_deps = bool(args.get("scan_deps", True))
+    timeout_sec = float(args.get("timeout_sec", 120))
+
+    findings: list[str] = []
+    scanned = 0
+    prefix = "" if target == root else target.relative_to(root).as_posix()
+    if scan_secrets:
+        if target.is_file():
+            candidates = [(prefix, target.read_text(encoding="utf-8", errors="ignore"))]
+        elif target.is_dir():
+            candidates = [
+                (rel, text)
+                for rel, text in _iter_workspace_text_files(root, max_files=max_files, exclude=exclude)
+                if not prefix or rel == prefix or rel.startswith(prefix + "/")
+            ]
+        else:
+            candidates = []
+        for rel, text in candidates:
+            scanned += 1
+            hits = _scan_redaction_violations(text, ignore_placeholders=True)
+            if hits:
+                findings.append(f"`{rel}` -> {hits[0]}")
+
+    dep_lines: list[str] = []
+    dep_fail = False
+    if scan_deps:
+        pip_audit_available = importlib.util.find_spec("pip_audit") is not None
+        if pip_audit_available:
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "pip_audit", "-f", "json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                )
+                vulns = 0
+                try:
+                    data = json.loads(proc.stdout or "[]")
+                    for dep in data if isinstance(data, list) else []:
+                        vulns += len(dep.get("vulns") or [])
+                except json.JSONDecodeError:
+                    dep_lines.append("- `pip-audit` produced non-JSON output; rerun manually.")
+                if vulns:
+                    dep_fail = True
+                    dep_lines.append(f"- **pip-audit found `{vulns}` known vulnerabilities.**")
+                else:
+                    dep_lines.append("- `pip-audit`: no known vulnerabilities in installed packages.")
+            except subprocess.TimeoutExpired:
+                dep_lines.append(f"- `pip-audit` timed out after {timeout_sec:.0f}s.")
+            except OSError as exc:
+                dep_lines.append(f"- `pip-audit` failed to run: {exc}")
+        else:
+            dep_lines.append(
+                "- `pip-audit` not installed. Install with `python -m pip install pip-audit` "
+                "or add it to your CI dependencies."
+            )
+        gitleaks = shutil.which("gitleaks")
+        dep_lines.append(
+            f"- `gitleaks`: {'available at ' + gitleaks if gitleaks else 'not installed (built-in regex scanner used)'}"
+        )
+
+    verdict = "FAIL" if findings or dep_fail else "PASS"
+    findings_block = "\n".join(f"- {f}" for f in findings) if findings else "- No secret/PAN patterns detected."
+    dep_block = "\n".join(dep_lines) if dep_lines else "- Dependency scan disabled."
+    excludes_text = ", ".join(str(e).strip() for e in exclude) or "none"
+
+    return _ok(
+        f"""# Trellis Security & Dependency Scan (`[REQ-P2-02]`)
+
+- **Workspace:** `{root}`
+- **Scan Target:** `{rel_path}`
+- **Text Files Scanned:** `{scanned}` (excludes: {excludes_text})
+- **Verdict:** **{verdict}**
+
+## Secret / PAN Findings
+{findings_block}
+
+## Dependency & Tooling
+{dep_block}
+
+## Notes
+- Findings report only pattern categories/paths, never raw secret values.
+- Run `trellis_scan` in CI as a non-bypassable gate before release.
+"""
+    )
+
+
+def tool_trellis_classify(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Classify content (Public/Internal/Confidential/Restricted) and gate AI prompts ([REQ-P2-03])."""
+    content = str(args.get("content", ""))
+    target = str(args.get("target", "prompt")).strip().lower()
+    if not content.strip():
+        return _err("`content` is required for trellis_classify.")
+
+    restricted: list[str] = list(_scan_redaction_violations(content))
+    if _JWT_RE.search(content):
+        restricted.append("JWT bearer token pattern detected")
+    lower = content.lower()
+    restricted += [f"Restricted keyword: `{kw}`" for kw in _RESTRICTED_KEYWORDS if kw in lower]
+
+    confidential: list[str] = []
+    if _EMAIL_RE.search(content):
+        confidential.append("Email address pattern detected")
+    if _PHONE_RE.search(content):
+        confidential.append("Phone number pattern detected")
+    if _IBAN_RE.search(content):
+        confidential.append("IBAN / bank account pattern detected")
+    confidential += [f"Confidential keyword: `{kw}`" for kw in _CONFIDENTIAL_KEYWORDS if kw in lower]
+
+    if restricted:
+        classification = "Restricted"
+    elif confidential:
+        classification = "Confidential"
+    elif "internal" in lower or "proprietary" in lower:
+        classification = "Internal"
+    else:
+        classification = "Public"
+
+    if target == "prompt":
+        allowed = classification in ("Public", "Internal")
+        reason = (
+            "Allowed: content is not Confidential/Restricted."
+            if allowed
+            else "Blocked: redact or de-identify before sending to an AI prompt (Tier 3)."
+        )
+    else:
+        allowed = classification != "Restricted"
+        reason = (
+            "Allowed for non-prompt target; avoid committing Confidential/Restricted data."
+            if allowed
+            else "Blocked: Restricted data must never enter logs, commits, or prompts (Tier 3)."
+        )
+
+    findings = restricted or confidential
+    findings_block = "\n".join(f"- {f}" for f in findings) if findings else "- No sensitive patterns detected."
+    return _ok(
+        f"""# Trellis Data Classification & AI Prompt Gate (`[REQ-P2-03]`)
+
+- **Classification:** **{classification}**
+- **Target:** `{target}`
+- **AI Prompt Allowed:** `{allowed}`
+- **Verdict:** {reason}
+
+## Signals (values never echoed)
+{findings_block}
+
+## Recommended Handling
+- **Public/Internal:** Safe for AI prompts under normal review.
+- **Confidential:** Redact or tokenize identifiers (`<USER_1>`, `<EMAIL_REDACTED>`) before prompting; restrict logs.
+- **Restricted:** Do not send to AI or external tools. Use synthetic data only (Tier 3 in `docs/standards/ai-boundary.md`).
+"""
+    )
+
+
+def tool_trellis_mcp_registry(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Enforce an approved MCP server allowlist and transport/scoping rules ([REQ-P2-04])."""
+    root = _workspace_root(workspace_root)
+    config_paths = list(args.get("config_paths") or [".mcp.json", ".agents/mcp_config.json"])
+    strict = bool(args.get("strict", True))
+
+    approved = args.get("approved_servers")
+    if not approved:
+        registry_path = root / "docs" / "standards" / "approved-mcp-servers.json"
+        if registry_path.is_file():
+            try:
+                registry = json.loads(registry_path.read_text(encoding="utf-8"))
+                entry = registry.get("approved", registry)
+                if isinstance(entry, dict):
+                    approved = list(entry.keys())
+                elif isinstance(entry, list):
+                    approved = [str(v) for v in entry]
+            except (OSError, json.JSONDecodeError):
+                approved = None
+        if not approved:
+            approved = ["trellis-mcp"]
+    approved_set = {str(a) for a in approved}
+
+    findings: list[str] = []
+    checked: list[str] = []
+    for rel in config_paths:
+        cfg_path = (root / str(rel)).resolve()
+        if not str(cfg_path).startswith(str(root)) or not cfg_path.is_file():
+            continue
+        checked.append(str(rel))
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            findings.append(f"`{rel}` is not valid JSON: {exc}")
+            continue
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        if not isinstance(servers, dict):
+            findings.append(f"`{rel}` has no `mcpServers` object.")
+            continue
+        for name, cfg in servers.items():
+            if name not in approved_set:
+                findings.append(
+                    f"`{rel}`: unapproved MCP server `{name}` (allowlist: {', '.join(sorted(approved_set))})"
+                )
+            if not isinstance(cfg, dict):
+                continue
+            command = str(cfg.get("command", "")).lower()
+            if re.search(r"\b(sh|bash|cmd|powershell|pwsh)\b", command) and re.search(
+                r"(-c\b|/c\b|-command\b)", command
+            ):
+                findings.append(f"`{rel}`: `{name}` launches an inline shell command (risky).")
+            url = str(cfg.get("serverUrl") or cfg.get("url") or "")
+            if url.startswith("http://") and not re.match(
+                r"http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?", url
+            ):
+                findings.append(f"`{rel}`: `{name}` uses plaintext HTTP remote URL `{url}`.")
+            env = cfg.get("env")
+            if isinstance(env, dict):
+                blob = "\n".join(f"{k}={v}" for k, v in env.items())
+                if _scan_redaction_violations(blob, ignore_placeholders=True):
+                    findings.append(f"`{rel}`: `{name}` embeds a secret-like value in `env`.")
+
+    if not checked:
+        return _ok(
+            "# Trellis Approved MCP Registry (`[REQ-P2-04]`)\n\n"
+            f"No MCP config files found. Allowlist: `{', '.join(sorted(approved_set))}`.\n"
+        )
+
+    verdict = "FAIL" if findings else "PASS"
+    findings_block = "\n".join(f"- {f}" for f in findings) if findings else "- All configured MCP servers are approved and transport-safe."
+    return _ok(
+        f"""# Trellis Approved MCP Registry (`[REQ-P2-04]`)
+
+- **Config Files Checked:** {", ".join(f"`{c}`" for c in checked)}
+- **Allowlist:** {", ".join(f"`{a}`" for a in sorted(approved_set))}
+- **Mode:** `{"strict" if strict else "advisory"}`
+- **Verdict:** **{verdict}**
+
+## Findings
+{findings_block}
+
+## Policy
+- Only servers in `docs/standards/approved-mcp-servers.json` may be enabled.
+- Remote MCP servers must use HTTPS (loopback HTTP is allowed for local development).
+- Never inline shell wrappers or embed credentials in `.mcp.json`.
 """
     )
 
@@ -680,14 +1587,22 @@ def tool_trellis_doctor(
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "trellis_get_standard",
-        "description": "Retrieve an authoritative Trellis engineering standard or template (e.g., testing-standard, rca-playbook, quota-efficiency, complexity-and-performance, security-baseline, ai-boundary, git-convention, definition-of-done, performance-sla, spec-template).",
+        "description": "Retrieve an authoritative Trellis engineering standard or template (e.g., testing-standard, rca-playbook, quota-efficiency, complexity-and-performance, security-baseline, ai-boundary, git-convention, definition-of-done, performance-sla, spec-template) with SHA-256/HMAC provenance metadata.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Standard or template name (or 'all' to list all available standards).",
-                }
+                    "description": "Standard or template name (or 'all' to list all available standards and versions).",
+                },
+                "version": {
+                    "type": "string",
+                    "description": "Optional historical version, e.g., '0.1'. Defaults to the current version.",
+                },
+                "offline": {
+                    "type": "boolean",
+                    "description": "If true, resolve from the local .trellis_cache/standards offline cache only.",
+                },
             },
             "required": ["name"],
         },
@@ -801,6 +1716,97 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "workspace_path": {"type": "string", "description": "Path to workspace root (defaults to current workspace)."},
                 "auto_fix": {"type": "boolean", "description": "If true, automatically fixes missing rule YAML frontmatter and removes deprecated workflows."},
+                "dry_run": {"type": "boolean", "description": "If true (default when auto_fix is set), preview fixes without writing to disk."},
+            },
+        },
+    },
+    {
+        "name": "trellis_test",
+        "description": "Generate REQ-linked failing test skeletons ([REQ-NNN-XX]) for Python unittest, TypeScript/Jest, Java/JUnit5, or C#/xUnit to enforce the Red -> Green testing discipline.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "spec_id": {"type": "string", "description": "Spec identifier, e.g., SPEC-042."},
+                "title": {"type": "string", "description": "Short feature or bugfix title."},
+                "requirements": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Testable requirements; each becomes a [REQ-NNN-XX] failing test.",
+                },
+                "language": {
+                    "type": "string",
+                    "enum": ["python", "typescript", "java", "csharp"],
+                    "description": "Target test language/framework.",
+                },
+                "test_file": {"type": "string", "description": "Optional suggested test file path."},
+            },
+            "required": ["spec_id", "title", "requirements"],
+        },
+    },
+    {
+        "name": "trellis_scan",
+        "description": "Scan the workspace for secrets/PANs using built-in patterns and optionally run pip-audit for dependency vulnerabilities. Reports categories and paths only, never raw secret values.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative path to scan (default '.')."},
+                "exclude": {"type": "array", "items": {"type": "string"}, "description": "Workspace-relative prefixes to skip."},
+                "max_files": {"type": "integer", "description": "Maximum number of text files to scan (default 500)."},
+                "scan_secrets": {"type": "boolean", "description": "Enable built-in secret/PAN scanning (default true)."},
+                "scan_deps": {"type": "boolean", "description": "Enable pip-audit dependency scanning when available (default true)."},
+                "timeout_sec": {"type": "number", "description": "Subprocess timeout for pip-audit in seconds."},
+            },
+        },
+    },
+    {
+        "name": "trellis_classify",
+        "description": "Classify content as Public/Internal/Confidential/Restricted and gate AI prompts or logs/commits (Tier 3). Sensitive values are never echoed back.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Content to classify (prompt, log line, or commit text)."},
+                "target": {"type": "string", "enum": ["prompt", "log", "commit"], "description": "Intended destination for the content."},
+            },
+            "required": ["content"],
+        },
+    },
+    {
+        "name": "trellis_mcp_registry",
+        "description": "Enforce the approved MCP server allowlist and transport/scoping rules for .mcp.json and .agents/mcp_config.json.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "config_paths": {"type": "array", "items": {"type": "string"}, "description": "Workspace-relative MCP config files to check."},
+                "approved_servers": {"type": "array", "items": {"type": "string"}, "description": "Override allowlist (defaults to docs/standards/approved-mcp-servers.json or trellis-mcp)."},
+                "strict": {"type": "boolean", "description": "If true (default), unapproved servers fail the audit."},
+            },
+        },
+    },
+    {
+        "name": "trellis_verify",
+        "description": "Verify a standard's SHA-256 hash and optional HMAC-SHA256 provenance signature to defend against tampered or injected standards.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Standard or template name to verify."},
+                "version": {"type": "string", "description": "Optional version to verify (defaults to current)."},
+                "expected_sha256": {"type": "string", "description": "Expected SHA-256 hex digest."},
+                "expected_signature": {"type": "string", "description": "Expected HMAC-SHA256 hex signature."},
+                "signing_key": {"type": "string", "description": "Optional HMAC key; defaults to TRELLIS_STANDARD_SIGNING_KEY or TRELLIS_BUNDLE_SIGNING_KEY."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "trellis_analytics",
+        "description": "Report token usage, estimated cost, and quota utilization from a local usage ledger (.trellis_usage.json) instead of advisory-only quota rules.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "usage_file": {"type": "string", "description": "Workspace-relative usage ledger path (default .trellis_usage.json)."},
+                "budget_tokens": {"type": "integer", "description": "Token budget for quota utilization (optional)."},
+                "cost_per_1k_tokens": {"type": "number", "description": "Cost per 1,000 tokens when entries omit cost_usd."},
+                "period_days": {"type": "number", "description": "Only include entries from the last N days."},
             },
         },
     },

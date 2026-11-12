@@ -6,14 +6,14 @@ description: Write or validate a requirement-traceable specification (Class M 4-
 # Skill: `/pb-spec` — Spec-Driven Development Workflow
 
 **Canonical Standards & Template:**
-- [templates/spec-template.md](../../../templates/spec-template.md)
-- [docs/standards/quota-efficiency.md](../../../docs/standards/quota-efficiency.md)
-- [docs/standards/ai-boundary.md](../../../docs/standards/ai-boundary.md)
+- [templates/spec-template.md](../../templates/spec-template.md)
+- [docs/standards/quota-efficiency.md](../../docs/standards/quota-efficiency.md)
+- [docs/standards/ai-boundary.md](../../docs/standards/ai-boundary.md)
 
 ## Execution Steps
 
 1. **Classify Task Size (`S` / `M` / `L`):**
-   - Call `trellis_budget` / `trellis_spec` on `@trellis-mcp` or use [quota-efficiency.md](../../../docs/standards/quota-efficiency.md):
+   - Call `trellis_budget` / `trellis_spec` on `@trellis-mcp` or use [quota-efficiency.md](../../docs/standards/quota-efficiency.md):
      - **Class M (2–5 files or 1-file Tier 2 change):** Draft **Part A (4-Section Micro-Spec)** inline inside the Implementation Plan artifact (keeps prompt cache warm in one session).
      - **Class L (cross-module, schema/architecture change, SLA impact):** Draft **Part A + Part B (Full 10-Section Spec)** in `docs/specs/NNN-<name>.md`.
 2. **Assign Traceable Requirement IDs (`[REQ-NNN-XX]`):**

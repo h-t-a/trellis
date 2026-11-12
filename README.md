@@ -1,7 +1,7 @@
 # `ai-dev-playbook` (Trellis) — Agentic & AI-Driven Engineering Standard & MCP Server
 
 **Version:** `v0.1.0`  
-**Primary Tools Supported:** **Antigravity IDE** & **Claude Code**  
+**Primary Tools Supported:** **Antigravity IDE**, **Claude Code**, **VS Code**, **JetBrains**, **Cursor**, and **Windsurf** (via `--emit-config`)\
 **Canonical Source of Truth:** [`docs/standards/`](./docs/standards/)  
 **Zero-Dependency MCP Server & Installer:** [`trellis_mcp/`](./trellis_mcp/) (`python -m trellis_mcp`)
 
@@ -24,7 +24,10 @@
 ```text
 trellis/
 ├── README.md                        # Project overview, MCP server guide, and VM deployment
-├── NOTICE.md                        # Detailed MCP setup, API key management, and Windows notice
+├── LICENSE                          # MIT license
+├── CHANGELOG.md                     # Release history and notable changes
+├── CONTRIBUTING.md                  # Development workflow, tests, and PR checklist
+├── SECURITY.md                      # Vulnerability reporting and security expectations
 ├── CLAUDE.md                        # < 200 lines; imports standards via @docs/standards/...
 ├── GEMINI.md                        # Workspace entrypoint for Antigravity IDE
 ├── pyproject.toml                   # Zero-dependency Python package definition (trellis-mcp)
@@ -36,7 +39,7 @@ trellis/
 │   ├── __main__.py                  # CLI entrypoint (--serve-http, --auto-generate-key, --generate-key, etc.)
 │   ├── server.py                    # JSON-RPC 2.0 MCP server over stdio
 │   ├── http_server.py               # Multi-threaded HTTP MCP server, TrellisKeyStore & /admin/keys RBAC
-│   ├── tools.py                     # 8 callable MCP tools with Tier 2/3 & quota guards
+│   ├── tools.py                     # 14 callable MCP tools with Tier 2/3, quota, provenance, and data-classification guards
 │   └── installer.py                 # Workspace sync, global installer, and zero-clone remote installer
 ├── tests/
 │   └── test_trellis_mcp.py          # Requirement-linked unit & HTTP integration tests ([REQ-MCP-01..08])
@@ -86,7 +89,13 @@ trellis/
 | `trellis_enhance` | `[REQ-MCP-02]` (`F10`) | Computes Little's Law concurrency ($\text{VUs} = \text{TPS} \times (R + Z)$), CPU/Memory Big-O, and I/O round-trip complexity. |
 | `trellis_handoff` | `[REQ-MCP-02]` | Generates a compact ($\le 25$-line) session state handoff packet before `/clear` or context split. |
 | `trellis_review` | `[REQ-MCP-02]` | Audits a unified git diff and commit message against Story DoD, test-weakening prohibitions, secret patterns, Conventional Commits, and `[REQ-NNN-XX]` traceability. |
-| `trellis_doctor` | `[REQ-MCP-02]` (`F02`) | Validates `.agents/rules/*.md` YAML frontmatter, skill line-count budgets, and deprecated workflow files (with optional `auto_fix`). |
+| `trellis_doctor` | `[REQ-MCP-02]` (`F02`) | Validates rules, skill budgets, JSON configs, skill mirror parity, and broken links (with `auto_fix` / `dry_run`). |
+| `trellis_test` | `[REQ-P2-01]` | Generates failing `[REQ-NNN-XX]` test skeletons for Python, TypeScript, Java, and C#. |
+| `trellis_scan` | `[REQ-P2-02]` | Scans for secrets/PANs and runs optional `pip-audit` dependency checks. |
+| `trellis_classify` | `[REQ-P2-03]` | Classifies content and blocks Restricted data from AI prompts, logs, or commits. |
+| `trellis_mcp_registry` | `[REQ-P2-04]` | Enforces the approved MCP server allowlist and transport/scoping rules. |
+| `trellis_verify` | `[REQ-P3-05]` | Verifies a standard's SHA-256 hash and optional HMAC-SHA256 provenance signature. |
+| `trellis_analytics` | `[REQ-P3-04]` | Reports token usage, estimated cost, and quota utilization from a local usage ledger. |
 
 ### 3.2 Unified Slash Skills (`/pb-*`)
 Stored canonically in `.agents/skills/*/SKILL.md` and synced to `.claude/skills/*/SKILL.md`:
@@ -110,7 +119,19 @@ Install the `trellis` plugin, rules, `/pb-*` skills, and `trellis-mcp` stdio ser
 ```bash
 python -m trellis_mcp --install-global
 python -m trellis_mcp --check
+python -m trellis_mcp --emit-config vscode --config-out .vscode/mcp.json
+python -m trellis_mcp --sync-cache
+python -m trellis_mcp --usage-report --budget-tokens 2000000
 ```
+
+### Multi-IDE Configuration & P3 Extras
+
+- **Editors:** Generate MCP config for VS Code, JetBrains, Cursor, Windsurf, or Claude with `--emit-config` (see [IDE Integration Matrix](./docs/integrations/ide-matrix.md)).
+- **Key dashboard:** Browse to `http://<host>:<port>/admin/dashboard` and sign in with an admin key. The server exchanges it for a short-lived, signed HttpOnly session cookie (15 min, `SameSite=Strict`, CSRF-protected); the raw key is never stored in browser storage.
+- **Versioned standards:** Request a historical snapshot with `trellis_get_standard {"name": "...", "version": "0.1"}`; populate the offline cache with `--sync-cache`.
+- **Provenance:** `trellis_get_standard` returns SHA-256/HMAC metadata; `trellis_verify` checks a hash or signature before trusting a standard.
+- **Cost/quota analytics:** `--usage-report` summarizes `.trellis_usage.json` and flags `WARN`/`EXCEEDED` budgets.
+  Ledger schema: `{"entries": [{"timestamp": "<ISO-8601>", "label": "team-a", "tool": "trellis_rca", "input_tokens": 1000, "output_tokens": 500}]}`.
 
 ### Mode B: Private VM HTTP Server, Single-File `.pyz` Deploy & Admin Key Management (`[REQ-MCP-05..09]`)
 See the full [Deployment & Release Progress Guide (`docs/deployment-guide.md`)](./docs/deployment-guide.md) for the completed milestones and the 5-step recurring deployment checklist.

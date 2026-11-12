@@ -6,9 +6,9 @@ description: Analyze workload, I/O round-trips, and Time/Space Big-O complexity 
 # Skill: `/pb-enhance` — Complexity-Aware Enhancement & Analysis
 
 **Canonical Standards:**
-- [docs/standards/complexity-and-performance.md](../../../docs/standards/complexity-and-performance.md)
-- [docs/standards/performance-sla.md](../../../docs/standards/performance-sla.md)
-- [docs/standards/testing-standard.md](../../../docs/standards/testing-standard.md)
+- [docs/standards/complexity-and-performance.md](../../docs/standards/complexity-and-performance.md)
+- [docs/standards/performance-sla.md](../../docs/standards/performance-sla.md)
+- [docs/standards/testing-standard.md](../../docs/standards/testing-standard.md)
 
 ## Execution Steps (absorbs `/pb-complexity`)
 

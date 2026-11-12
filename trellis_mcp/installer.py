@@ -25,7 +25,7 @@ from typing import Any
 from urllib.request import Request
 
 from trellis_mcp import __version__
-from trellis_mcp.tools import list_bundled_skills, read_bundled_text
+from trellis_mcp.tools import STANDARD_FILE_MAP, list_bundled_skills, read_bundled_text
 
 
 def _merge_mcp_config(config_path: Path, server_entry: dict[str, Any]) -> None:
@@ -65,9 +65,11 @@ def sync_workspace(repo_root: Path) -> str:
             shutil.copyfile(skill_md, dest_skill_dir / "SKILL.md")
             synced_skills.append(skill_name)
 
-            # For /pb-* skills, also mirror to .claude/commands/<name>.md for Claude Code slash command compatibility
+            # For /pb-* skills, also mirror to .claude/commands/<name>.md for Claude Code slash command compatibility.
+            # Command files live one directory shallower than skills, so rebase `../../../` links to `../../`.
             if skill_name.startswith("pb-"):
-                shutil.copyfile(skill_md, claude_commands_dir / f"{skill_name}.md")
+                command_text = skill_md.read_text(encoding="utf-8").replace("(../../../", "(../../")
+                (claude_commands_dir / f"{skill_name}.md").write_text(command_text, encoding="utf-8")
 
     # Remove deprecated .agents/workflows/*.md files (F01)
     workflows_dir = root / ".agents" / "workflows"
@@ -136,7 +138,7 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
     else:
         (plugin_rules_dir / "AGENTS.md").write_text(
             "---\ntrigger: always_on\ndescription: Trellis AI Engineering Playbook global rules\n---\n\n"
-            "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`).\n",
+            "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`, `trellis_test`, `trellis_scan`, `trellis_classify`, `trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`).\n",
             encoding="utf-8",
         )
 
@@ -171,6 +173,42 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
     )
 
 
+def _standard_provenance(repo_root: Path) -> dict[str, dict[str, Any]]:
+    """Return per-standard version, SHA-256, and optional HMAC signature for bundles ([REQ-P3-05])."""
+    root = repo_root.resolve()
+    entries: dict[str, dict[str, Any]] = {}
+    versions: dict[str, str] = {}
+    manifest_path = root / "docs" / "standards" / "standards.json"
+    if manifest_path.is_file():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for name, entry in (data.get("standards") or {}).items():
+                if isinstance(entry, dict) and entry.get("version"):
+                    versions[str(name)] = str(entry["version"])
+        except (OSError, ValueError, TypeError):
+            versions = {}
+
+    signing_key = os.environ.get("TRELLIS_STANDARD_SIGNING_KEY") or os.environ.get(
+        "TRELLIS_BUNDLE_SIGNING_KEY"
+    )
+    for name, rel_path in STANDARD_FILE_MAP.items():
+        content = read_bundled_text(rel_path, workspace_root=root)
+        if content is None:
+            continue
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        record: dict[str, Any] = {
+            "version": versions.get(name, "0.1"),
+            "path": rel_path,
+            "sha256": digest,
+        }
+        if signing_key:
+            record["signature"] = hmac.new(
+                signing_key.encode("utf-8"), content.encode("utf-8"), hashlib.sha256
+            ).hexdigest()
+        entries[name] = record
+    return entries
+
+
 def build_remote_bundle(repo_root: Path) -> dict[str, Any]:
     """Build a JSON-serializable bundle of rules and skills for zero-clone remote clients ([REQ-MCP-07, REQ-MCP-09])."""
     root = repo_root.resolve()
@@ -178,13 +216,14 @@ def build_remote_bundle(repo_root: Path) -> dict[str, Any]:
 
     rules_md = read_bundled_text(".agents/rules/standards.md", workspace_root=root) or (
         "---\ntrigger: always_on\ndescription: Trellis AI Engineering Playbook global rules\n---\n\n"
-        "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`).\n"
+        "# Trellis Global Rules\nUse `trellis-mcp` tools (`trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_review`, `trellis_test`, `trellis_scan`, `trellis_classify`, `trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`).\n"
     )
 
     return {
         "version": __version__,
         "rules_md": rules_md,
         "skills": skills,
+        "standards": _standard_provenance(root),
     }
 
 
@@ -205,6 +244,9 @@ def build_pyz_bundle(repo_root: Path, output_path: Path) -> str:
         include_patterns = [
             "trellis_mcp/*.py",
             "docs/standards/*.md",
+            "docs/standards/*.json",
+            "docs/standards/versions/*.md",
+            "docs/integrations/*.md",
             "templates/*.md",
             ".agents/rules/*.md",
             ".agents/skills/*/SKILL.md",

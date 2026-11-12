@@ -13,14 +13,20 @@ from trellis_mcp.tools import (
     STANDARD_FILE_MAP,
     TOOL_DEFINITIONS,
     read_bundled_text,
+    tool_trellis_analytics,
     tool_trellis_budget,
+    tool_trellis_classify,
     tool_trellis_doctor,
     tool_trellis_enhance,
     tool_trellis_get_standard,
     tool_trellis_handoff,
+    tool_trellis_mcp_registry,
     tool_trellis_rca,
     tool_trellis_review,
+    tool_trellis_scan,
     tool_trellis_spec,
+    tool_trellis_test,
+    tool_trellis_verify,
 )
 
 PROMPT_DEFINITIONS: list[dict[str, Any]] = [
@@ -88,6 +94,12 @@ class TrellisMCPServer:
             "trellis_handoff": tool_trellis_handoff,
             "trellis_review": tool_trellis_review,
             "trellis_doctor": tool_trellis_doctor,
+            "trellis_test": tool_trellis_test,
+            "trellis_scan": tool_trellis_scan,
+            "trellis_classify": tool_trellis_classify,
+            "trellis_mcp_registry": tool_trellis_mcp_registry,
+            "trellis_verify": tool_trellis_verify,
+            "trellis_analytics": tool_trellis_analytics,
         }
 
     def handle_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
