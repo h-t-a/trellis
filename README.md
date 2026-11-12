@@ -9,11 +9,11 @@
 
 ## 1. Purpose
 
-`ai-dev-playbook` (**Trellis**) is a version-controlled engineering playbook, cross-IDE skill bundle (18 skills), and zero-dependency **Model Context Protocol (MCP)** control plane (`trellis-mcp`) for agentic and multi-AI software engineering:
+`ai-dev-playbook` (**Trellis**) is a version-controlled engineering playbook, cross-IDE skill bundle (17 unified `/pb-*` skills), and zero-dependency **Model Context Protocol (MCP)** control plane (`trellis-mcp`) for agentic and multi-AI software engineering:
 
 1. **Consistency:** Every project—and every **Software Engineer**—follows the same quality bar when building with **AI agents, foundation models, RAG pipelines, subagents, and MCP tools**.
 2. **Skill Growth:** Working with AI agents makes engineers and architects stronger (critical review of architectural/implementation plans, failing tests first, turning mistakes into explicit rules), not weaker.
-3. **Single Source of Truth Across IDEs:** Teams share one canonical set of standards (`docs/standards/`) and unified Agent Skills (`.agents/skills/*/SKILL.md` synced to `.claude/skills/*/SKILL.md`).
+3. **Single Source of Truth Across IDEs & MCP:** Teams share one canonical set of standards (`docs/standards/`) and **17 unified `/pb-*` Agent Skills** (`.agents/skills/pb-*/SKILL.md`, synced to `.claude/skills/` & `.claude/commands/`, and served directly via MCP `prompts/list` & `prompts/get`).
 4. **Structured Lifecycle & Multi-AI Governance:** Every significant change follows `Plan -> Implement -> Verify -> Review` backed by Tier 2 human approval gates, loop halts, cross-model reviewer separation, data-classification routing (`Public` / `Internal` / `Confidential` / `Restricted`), and redacted JSONL audit logs.
 5. **Centralized or Loopback Hosting (Zero Git Clone):** Run `trellis-mcp` safely on localhost (`127.0.0.1` default with `Origin` allowlist & `429` auth lockout) or host centrally on a team VM with HTTPS/TLS, signed `.pyz` deploys, Admin Dashboard (`HttpOnly` cookie + CSRF), and per-key tool `scopes`.
 
@@ -37,7 +37,7 @@ trellis/
 ├── trellis_mcp/                     # Zero-dependency Python MCP Control Plane & Installer
 │   ├── __init__.py                  # Package version (0.1.0)
 │   ├── __main__.py                  # CLI (--serve-http, --host 127.0.0.1 default, --scopes, --allowed-origin, --audit-log, etc.)
-│   ├── server.py                    # JSON-RPC 2.0 MCP server (18 tools, 14 prompts, protocolVersion negotiation)
+│   ├── server.py                    # JSON-RPC 2.0 MCP server (18 tools, 17 /pb-* prompts, protocolVersion negotiation)
 │   ├── http_server.py               # Multi-threaded HTTP MCP/A2A server, mtime key cache, Origin check, lockout, dashboard
 │   ├── tools.py                     # Core governance tools + Luhn PAN, JWT, Myanmar NRC/phone, IBAN, prompt-wrap guards
 │   ├── audit.py                     # Redacted JSONL request/tool audit logger (TrellisAuditLogger)
@@ -52,12 +52,12 @@ trellis/
 │   ├── mcp_config.json              # Workspace MCP configuration for Antigravity IDE
 │   ├── skills.json                  # Skills manifest pointing to .agents/skills
 │   ├── rules/                       # Modular rules with YAML trigger frontmatter
-│   └── skills/                      # 18 canonical skills (SKILL.md) synced across platforms
+│   └── skills/                      # 17 canonical /pb-* skills (SKILL.md) synced across platforms & MCP prompts
 ├── .claude/                         # Claude Code configuration
 │   ├── settings.json                # Hardened deny baseline (.trellis_keys.json, ~/.ssh, exfil) + wired PreToolUse/Stop hooks
 │   ├── rules/                       # Modular rules pointing to docs/standards/
-│   ├── commands/                    # 18 mirrored slash commands for Claude Code CLI
-│   ├── skills/                      # 18 mirrored SKILL.md bundles (synced via --sync-workspace)
+│   ├── commands/                    # 17 mirrored /pb-* slash commands for Claude Code CLI
+│   ├── skills/                      # 17 mirrored SKILL.md bundles (synced via --sync-workspace)
 │   ├── agents/                      # Read-only code-reviewer & security-auditor, plus test-writer
 │   └── hooks/                       # validate-bash.sh, secret-scan.sh, run-tests.sh
 ├── docs/
@@ -112,11 +112,11 @@ trellis/
 | `trellis_pipeline` | `[REQ-TRL-12]` | Enforces stage transitions (`discover` -> `done`), Tier 2 human approval gates, 3-strike loop halts, and cross-model reviewer separation. |
 | `trellis_synthesize` | `[REQ-TRL-13]` | Compares multi-AI responses into explicit **Agreements** and **Divergences** without silent majority voting. |
 
-### 3.2 Unified Slash Skills (`18` canonical skills)
-Stored canonically in `.agents/skills/*/SKILL.md` and synced to `.claude/skills/*/SKILL.md` (and mirrored under `.claude/commands/*.md`):
-- **Core Lifecycle:** `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review`, `/pb-release-check`
+### 3.2 Unified Slash Skills & MCP Prompts (`17` canonical `/pb-*` skills)
+Every workflow playbook is stored canonically in `.agents/skills/pb-*/SKILL.md`, automatically mirrored to `.claude/skills/` and `.claude/commands/pb-*.md` (`--sync-workspace`), **and exposed directly through the MCP server (`prompts/list` & `prompts/get`)**:
+- **Core Lifecycle:** `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review` (unified Pre-PR & Code Review), `/pb-release-check`
 - **Multi-AI & Knowledge:** `/pb-route`, `/pb-synthesize`, `/pb-knowledge`
-- **Engineering, Git & Governance:** `/git-convention`, `/data-classification`, `/mcp-registry-audit`, `/test-writer`, `/security-audit`, `/code-review`, `/perf-test`
+- **Engineering, Git & Governance:** `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-test-writer`, `/pb-security-audit`, `/pb-perf-test`
 
 ### 3.3 HTTP Security, Protocol & Discovery Features (`[REQ-TRL-01..06]`, `[REQ-TRL-12]`)
 - **Safe Loopback Binding & Origin Check:** `--serve-http` defaults to `127.0.0.1` (`--host 0.0.0.0` explicit for VMs). Disallowed `Origin` headers on `/mcp` or `/admin/*` return `403 Forbidden` (configurable via `--allowed-origin` / `TRELLIS_ALLOWED_ORIGINS`).
