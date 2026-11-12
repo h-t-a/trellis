@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--emit-config` bridge generating MCP config for VS Code, JetBrains, Cursor, Windsurf, and Claude.
 - Versioned standards manifest (`docs/standards/standards.json`) with offline cache (`--sync-cache`).
 - Admin key-management dashboard at `GET /admin/dashboard`.
+- HttpOnly admin dashboard sessions: key exchange via `POST /admin/session`, 15-minute signed cookie, `SameSite=Strict`, CSRF header enforcement, server-side sign-out, and nonce-based CSP. The raw admin key is no longer stored in browser storage.
 - `docs/standards/approved-mcp-servers.json` and `docs/standards/data-classification.md` (draft).
 - Workspace doctor checks for JSON validity, skill mirror parity, broken relative links, and `--dry-run` previews.
 - `/readyz` readiness endpoint and admin-only `/metrics` endpoint with per-key usage counters.

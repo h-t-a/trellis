@@ -577,6 +577,13 @@ class TestTrellisMCPServer(unittest.TestCase):
             expired = store.generate_key(label="old", role="member", expires_days=-1)
             self.assertIsNone(store.verify_token(expired["api_key"]))
 
+            editable = store.generate_key(label="edit-me", role="member")
+            updated = store.update_key(editable["key_id"], label="renamed", role="admin")
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated["label"], "renamed")
+            self.assertEqual(updated["role"], "admin")
+            self.assertEqual(store.verify_token(editable["api_key"]), "admin")
+
             rc_rotate = main(["--rotate-key", "svc", "--keys-file", str(keys_file)])
             self.assertEqual(rc_rotate, 0)
             self.assertIsNone(store.verify_token(raw_key))
@@ -904,7 +911,260 @@ class TestTrellisMCPServer(unittest.TestCase):
                 body = resp.read().decode("utf-8")
                 self.assertIn("Trellis Key Dashboard", body)
                 self.assertIn("/admin/keys", body)
+                self.assertIn("/admin/session", body)
+                self.assertIn("Sign in as an Administrator", body)
+                self.assertIn("Active Keys", body)
+                self.assertNotIn("Server online", body)
+                self.assertNotIn('id="serverState"', body)
+                self.assertIn('id="serverMeta"', body)
+                self.assertIn("Generate a key", body)
+                self.assertIn("Access Keys", body)
+                self.assertIn("Generate Key", body)
+                self.assertIn('id="navAccess"', body)
+                self.assertIn('id="navOverview"', body)
+                self.assertIn('setActiveTab("navOverview")', body)
+                self.assertIn('id="generateModal"', body)
+                self.assertIn('id="editModal"', body)
+                self.assertIn("Search label, key ID, or prefix", body)
+                self.assertIn("Copy this key now", body)
+                self.assertIn('id="pagination"', body)
+                self.assertIn('id="prevPage"', body)
+                self.assertIn('id="nextPage"', body)
+                self.assertIn('id="pageNumbers"', body)
+                self.assertIn("<th class=\"no-col\">No.</th>", body)
+                self.assertIn("Refresh", body)
+                self.assertNotIn("Reload list", body)
+                self.assertNotIn('id="connBadge"', body)
+                self.assertIn('id="themeToggle"', body)
+                self.assertNotIn('id="refreshServer"', body)
+                self.assertNotIn("Access control", body)
+                self.assertIn("No keys yet", body)
+                self.assertIn('rel="icon"', body)
+                self.assertIn("/favicon.ico", body)
+                self.assertIn("TRELLIS", body)
+                self.assertIn("MCP ACCESS", body)
+                self.assertIn("login-brand", body)
+                self.assertIn('id="loginError"', body)
+                self.assertIn("Enter an admin key first.", body)
+                self.assertIn("This page does not store your admin key.", body)
+                self.assertIn('id="mainNav"', body)
+                self.assertIn('class="site-footer" id="siteFooter"', body)
+                self.assertIn(
+                    "Trellis MCP access console · Keys are stored on the server. Your admin key is exchanged for a short-lived HttpOnly session cookie. Anyone with a valid key can use its assigned role until it is revoked.",
+                    body,
+                )
+                self.assertIn("© 2026 HTA. All rights reserved.", body)
+                self.assertIn('dom.siteFooter.classList.remove("hidden")', body)
+                self.assertNotIn("sessionStorage", body)
+                self.assertNotIn("localStorage", body)
                 self.assertNotIn("dashboard-test-key", body)
+                self.assertEqual(resp.headers.get("X-Frame-Options"), "DENY")
+                self.assertEqual(resp.headers.get("X-Content-Type-Options"), "nosniff")
+                csp = resp.headers.get("Content-Security-Policy", "")
+                self.assertIn("frame-ancestors 'none'", csp)
+                self.assertIn("script-src 'nonce-", csp)
+                self.assertNotIn("unsafe-inline", csp)
+                self.assertNotIn("__NONCE__", body)
+
+            favicon = Request(f"{http_srv.base_url}/favicon.ico", method="GET")
+            with http_srv.open_request(favicon) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers.get("Content-Type"), "image/x-icon")
+                ico = resp.read()
+                self.assertTrue(ico.startswith(b"\x00\x00\x01\x00"))
+                self.assertGreater(len(ico), 100)
+
+    def test_req_p3_06_admin_session_cookie_and_csrf(self) -> None:
+        """[REQ-P3-06] Verify HttpOnly sessions, CSRF enforcement, and server-side sign-out."""
+        admin_key = "dashboard-session-admin-key"
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key=admin_key,
+            workspace_root=self.repo_root,
+        ) as http_srv:
+            base = http_srv.base_url
+
+            def expected_error(request: Request, code: int) -> None:
+                with self.assertRaises(HTTPError) as ctx:
+                    http_srv.open_request(request)
+                self.assertEqual(ctx.exception.code, code)
+                ctx.exception.close()
+
+            login_req = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": admin_key}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with http_srv.open_request(login_req) as resp:
+                self.assertEqual(resp.status, 200)
+                login = json.loads(resp.read().decode("utf-8"))
+                set_cookie = resp.headers.get("Set-Cookie", "")
+            self.assertEqual(login["status"], "authenticated")
+            self.assertNotIn(admin_key, json.dumps(login))
+            self.assertIn("HttpOnly", set_cookie)
+            self.assertIn("SameSite=Strict", set_cookie)
+            self.assertIn("Path=/", set_cookie)
+            self.assertIn("Max-Age=", set_cookie)
+            self.assertNotIn("Secure", set_cookie)
+            cookie = set_cookie.split(";", 1)[0]
+            self.assertTrue(cookie.startswith("trellis_admin_session="))
+
+            list_req = Request(
+                f"{base}/admin/keys",
+                headers={"Cookie": cookie},
+                method="GET",
+            )
+            with http_srv.open_request(list_req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn("keys", json.loads(resp.read().decode("utf-8")))
+
+            create_payload = json.dumps({"label": "csrf-key", "role": "member"}).encode(
+                "utf-8"
+            )
+            no_csrf = Request(
+                f"{base}/admin/keys",
+                data=create_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                },
+                method="POST",
+            )
+            expected_error(no_csrf, 403)
+
+            with_csrf = Request(
+                f"{base}/admin/keys",
+                data=create_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                    "X-Trellis-CSRF": "1",
+                },
+                method="POST",
+            )
+            with http_srv.open_request(with_csrf) as resp:
+                self.assertEqual(resp.status, 201)
+                created = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(created["api_key"].startswith("trl_"))
+
+            update_payload = json.dumps({"label": "csrf-key-edited", "role": "member"}).encode(
+                "utf-8"
+            )
+            expected_error(
+                Request(
+                    f"{base}/admin/keys/{created['key_id']}",
+                    data=update_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Cookie": cookie,
+                    },
+                    method="PATCH",
+                ),
+                403,
+            )
+            update_req = Request(
+                f"{base}/admin/keys/{created['key_id']}",
+                data=update_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                    "X-Trellis-CSRF": "1",
+                },
+                method="PATCH",
+            )
+            with http_srv.open_request(update_req) as resp:
+                self.assertEqual(resp.status, 200)
+                updated = json.loads(resp.read().decode("utf-8"))["key"]
+                self.assertEqual(updated["label"], "csrf-key-edited")
+                self.assertEqual(updated["role"], "member")
+
+            member_login = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": created["api_key"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            expected_error(member_login, 403)
+
+            bad_login = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": "not-a-valid-admin-key"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            expected_error(bad_login, 401)
+
+            status_req = Request(
+                f"{base}/admin/session",
+                headers={"Cookie": cookie},
+                method="GET",
+            )
+            with http_srv.open_request(status_req) as resp:
+                self.assertEqual(resp.status, 200)
+                status = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(status["authenticated"])
+            self.assertEqual(status["key_id"], "env-admin")
+
+            signout_req = Request(
+                f"{base}/admin/session",
+                headers={"Cookie": cookie, "X-Trellis-CSRF": "1"},
+                method="DELETE",
+            )
+            with http_srv.open_request(signout_req) as resp:
+                self.assertEqual(resp.status, 200)
+                clear_cookie = resp.headers.get("Set-Cookie", "")
+            self.assertIn("Max-Age=0", clear_cookie)
+
+            expected_error(
+                Request(
+                    f"{base}/admin/keys",
+                    headers={"Cookie": cookie},
+                    method="GET",
+                ),
+                401,
+            )
+
+    def test_req_p3_07_revoked_admin_key_invalidates_session(self) -> None:
+        """[REQ-P3-07] Verify revoking a stored admin key invalidates its browser session."""
+        with TrellisHTTPServer(
+            host="127.0.0.1",
+            port=0,
+            api_key="root-admin-key",
+            workspace_root=self.repo_root,
+        ) as http_srv:
+            base = http_srv.base_url
+            issued = http_srv.key_store.generate_key(label="browser-admin", role="admin")
+            login_req = Request(
+                f"{base}/admin/session",
+                data=json.dumps({"api_key": issued["api_key"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with http_srv.open_request(login_req) as resp:
+                self.assertEqual(resp.status, 200)
+                set_cookie = resp.headers.get("Set-Cookie", "")
+            cookie = set_cookie.split(";", 1)[0]
+
+            revoke_req = Request(
+                f"{base}/admin/keys/{issued['key_id']}",
+                headers={"Authorization": "Bearer root-admin-key"},
+                method="DELETE",
+            )
+            with http_srv.open_request(revoke_req) as resp:
+                self.assertEqual(resp.status, 200)
+
+            with self.assertRaises(HTTPError) as ctx:
+                http_srv.open_request(
+                    Request(
+                        f"{base}/admin/keys",
+                        headers={"Cookie": cookie},
+                        method="GET",
+                    )
+                )
+            self.assertEqual(ctx.exception.code, 401)
+            ctx.exception.close()
 
     def test_req_p3_03_versioned_standards_and_offline_cache(self) -> None:
         """[REQ-P3-03] Verify version selection, manifest listing, and offline cache fallback."""
