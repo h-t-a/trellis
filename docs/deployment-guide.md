@@ -38,7 +38,7 @@ Complete these steps **once** on your Windows VM (`<vm-ip>`, `<domain>\<vm-user>
 - [ ] **Step 2.3 — Run [`scripts/setup-vm-once.ps1`](../scripts/setup-vm-once.ps1) Inside Your RDP Session (`mstsc /v:<vm-ip>`):**
   - On a fresh Windows VM (`<vm-ip>`), only **Port 3389 (RDP)** is open by default (`WinRM 5985` and `Port 8080` are closed until initialized).
   - Copy these 2 files from your local machine (`d:\hta\M.C.Sc_Repo\trellis`) into your RDP session on `<vm-ip>`:
-    1. [`dist/trellis-mcp.pyz`](../dist/trellis-mcp.pyz)
+    1. `dist/trellis-mcp.pyz` (build it first with `python -m trellis_mcp --build-pyz dist/trellis-mcp.pyz`)
     2. [`scripts/setup-vm-once.ps1`](../scripts/setup-vm-once.ps1)
   - Open **PowerShell as Administrator** on the VM in that folder and run:
     ```powershell
@@ -64,7 +64,7 @@ Every time you update a standard in `docs/standards/`, edit a skill in `.agents/
 
 ```mermaid
 flowchart LR
-    S1["1. Sync & Doctor\n--sync-workspace\n--check"] --> S2["2. Run Automated Tests\nunittest (14 tests)"]
+    S1["1. Sync & Doctor\n--sync-workspace\n--check"] --> S2["2. Run Automated Tests\nunittest suite"]
     S2 --> S3["3. Build Single-File .pyz\ndist/trellis-mcp.pyz"]
     S3 --> S4["4. Push 1 File to VM\nC:\\Trellis\\trellis-mcp.pyz\n& Restart Task"]
     S4 --> S5["5. Verify /healthz\n& Client Bundle"]

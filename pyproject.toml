@@ -7,6 +7,7 @@ name = "trellis-mcp"
 version = "0.1.0"
 description = "Zero-dependency MCP server and cross-device skill/rule installer for the Trellis AI Engineering Playbook"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.9"
 authors = [
     { name = "HTA" }

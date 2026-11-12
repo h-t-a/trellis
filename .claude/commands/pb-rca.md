@@ -6,9 +6,9 @@ description: Fast 9-step Root-Cause Analysis and minimal bug fix workflow with T
 # Skill: `/pb-rca` — Fast Root-Cause Analysis & Minimal Fix
 
 **Canonical Standards:**
-- [docs/standards/rca-playbook.md](../../../docs/standards/rca-playbook.md)
-- [docs/standards/testing-standard.md](../../../docs/standards/testing-standard.md)
-- [docs/standards/ai-boundary.md](../../../docs/standards/ai-boundary.md)
+- [docs/standards/rca-playbook.md](../../docs/standards/rca-playbook.md)
+- [docs/standards/testing-standard.md](../../docs/standards/testing-standard.md)
+- [docs/standards/ai-boundary.md](../../docs/standards/ai-boundary.md)
 
 ## Execution Steps
 
@@ -21,4 +21,4 @@ description: Fast 9-step Root-Cause Analysis and minimal bug fix workflow with T
    - **Form at most 3 ranked hypotheses** (including banking concurrency, lock ordering, idempotency, and SQL `EXPLAIN` checks per `[REQ-RCA-03]`) and state the single cheapest check to **disprove** each.
    - **Run the cheapest discriminating check first.** Stop and pause for human confirmation once the cause is proven (or re-plan via `/grill-me` after 3 failed attempts).
 3. **Phase 2 — Failing Test & Minimal Fix (absorbs `/pb-fix`):**
-   - Write a failing test (`Red`) citing the bug/requirement ID, apply the minimal diff (`Green`), run the test suite once, and produce a Walkthrough ([templates/walkthrough.md](../../../templates/walkthrough.md)).
+   - Write a failing test (`Red`) citing the bug/requirement ID, apply the minimal diff (`Green`), run the test suite once, and produce a Walkthrough ([templates/walkthrough.md](../../templates/walkthrough.md)).

@@ -187,6 +187,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Auto-fix missing YAML frontmatter or deprecated workflow files when running with --check/--doctor.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview --fix changes without writing to disk.",
+    )
 
     args = parser.parse_args(argv)
     default_root = Path.cwd() if (Path.cwd() / ".agents").exists() else PACKAGE_ROOT
@@ -279,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.doctor:
         res = tool_trellis_doctor(
-            {"workspace_path": str(root), "auto_fix": args.fix},
+            {"workspace_path": str(root), "auto_fix": args.fix, "dry_run": args.dry_run},
             workspace_root=root,
         )
         text = res["content"][0]["text"]

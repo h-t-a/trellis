@@ -1,0 +1,17 @@
+{
+  "version": "0.1",
+  "status": "DRAFT",
+  "note": "Human approval is required before enabling any additional MCP server. See docs/standards/ai-boundary.md (Tier 2/3).",
+  "approved": {
+    "trellis-mcp": {
+      "transport": "stdio",
+      "command": "python -m trellis_mcp",
+      "scopes": [
+        "read:standards",
+        "read:workspace",
+        "write:artifacts"
+      ],
+      "review": "Built-in zero-dependency Trellis server. No outbound network egress; workspace-scoped file access only."
+    }
+  }
+}

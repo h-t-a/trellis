@@ -6,11 +6,11 @@ description: Classify task cost/risk (S/M/L & AI Boundary Tier 1-3), draft an Im
 # Skill: `/pb-plan` — Implementation Plan & Tier 2 Approval Gate
 
 **Canonical Standards:**
-- [docs/standards/definition-of-done.md](../../../docs/standards/definition-of-done.md)
-- [docs/standards/ai-boundary.md](../../../docs/standards/ai-boundary.md)
-- [docs/standards/quota-efficiency.md](../../../docs/standards/quota-efficiency.md)
-- [docs/standards/testing-standard.md](../../../docs/standards/testing-standard.md)
-- **Template:** [templates/implementation-plan.md](../../../templates/implementation-plan.md)
+- [docs/standards/definition-of-done.md](../../docs/standards/definition-of-done.md)
+- [docs/standards/ai-boundary.md](../../docs/standards/ai-boundary.md)
+- [docs/standards/quota-efficiency.md](../../docs/standards/quota-efficiency.md)
+- [docs/standards/testing-standard.md](../../docs/standards/testing-standard.md)
+- **Template:** [templates/implementation-plan.md](../../templates/implementation-plan.md)
 
 ## Execution Steps
 
@@ -20,6 +20,6 @@ description: Classify task cost/risk (S/M/L & AI Boundary Tier 1-3), draft an Im
 2. **Targeted Read-Only Inspection:**
    - Read only the specific `@file`s relevant to the task without making code edits.
 3. **Create Implementation Plan Artifact:**
-   - Draft the plan following [templates/implementation-plan.md](../../../templates/implementation-plan.md) (including an inline 4-section Micro-Spec for Class M tasks), listing exact files to touch and failing tests (`[REQ-NNN-XX]`) to write first.
+   - Draft the plan following [templates/implementation-plan.md](../../templates/implementation-plan.md) (including an inline 4-section Micro-Spec for Class M tasks), listing exact files to touch and failing tests (`[REQ-NNN-XX]`) to write first.
 4. **STOP for Human Approval:**
    - Request human review (`HTA` / reviewer) on the Implementation Plan artifact before modifying project code.

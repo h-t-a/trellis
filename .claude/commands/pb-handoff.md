@@ -5,7 +5,7 @@ description: Save a compact (under 40 lines) session state handoff summary befor
 
 # Skill: `/pb-handoff` — Compact Session State Handoff
 
-**Canonical Standard:** [docs/standards/quota-efficiency.md](../../../docs/standards/quota-efficiency.md)
+**Canonical Standard:** [docs/standards/quota-efficiency.md](../../docs/standards/quota-efficiency.md)
 
 ## When to Use
 - Prefer built-in **`/compact`** when continuing the *same* Class M task in-session.

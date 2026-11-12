@@ -1,7 +1,9 @@
 """Private VM HTTP MCP Server with constant-time Bearer Token authentication ([REQ-MCP-05..08]).
 
 Exposes:
-- `GET    /healthz`          -> Unauthenticated health probe (`200 OK`)
+- `GET    /healthz`          -> Unauthenticated liveness probe (`200 OK`)
+- `GET    /readyz`           -> Unauthenticated readiness/observability probe (version, bundle hash, uptime)
+- `GET    /metrics`          -> Admin-only JSON metrics and per-key usage counters (`[REQ-P2-05]`)
 - `POST   /mcp`              -> Protected JSON-RPC 2.0 MCP endpoint (`Authorization: Bearer <API_KEY>`)
 - `GET    /bundle.json`      -> Protected skill & rule bundle for zero-clone remote client setup
 - `GET    /install.sh`       -> Protected shell bootstrap script (`curl -H "Authorization: Bearer $KEY" .../install.sh | sh`)
@@ -230,13 +232,15 @@ class TrellisKeyStore:
             for rec in records
         )
 
-    def verify_token(self, candidate: str | None) -> str | None:
-        """Verify a candidate Bearer token in constant time and return its role or None."""
+    def authenticate(
+        self, candidate: str | None
+    ) -> tuple[str, str, str] | None:
+        """Verify a candidate token and return `(role, key_id, label)` or None ([REQ-P2-05])."""
         if not candidate:
             return None
         now = datetime.now(timezone.utc)
         cand_bytes = candidate.encode("utf-8")
-        matched_role: str | None = None
+        matched: tuple[str, str, str] | None = None
         with self._lock:
             records = self._load_records()
             dirty = False
@@ -245,20 +249,36 @@ class TrellisKeyStore:
                     continue
                 salt = rec.get("salt")
                 token_hash = rec.get("token_hash")
-                matched = False
+                is_match = False
                 if token_hash and salt:
-                    matched = hmac.compare_digest(_hash_token(candidate, str(salt)), str(token_hash))
+                    is_match = hmac.compare_digest(_hash_token(candidate, str(salt)), str(token_hash))
                 elif rec.get("token"):
-                    matched = hmac.compare_digest(cand_bytes, str(rec["token"]).encode("utf-8"))
-                if matched:
-                    matched_role = str(rec.get("role", "member"))
+                    is_match = hmac.compare_digest(cand_bytes, str(rec["token"]).encode("utf-8"))
+                if is_match:
+                    matched = (
+                        str(rec.get("role", "member")),
+                        str(rec.get("key_id", "unknown")),
+                        str(rec.get("label", "unknown")),
+                    )
                     last_used = _parse_utc(rec.get("last_used_at"))
                     if last_used is None or (now - last_used).total_seconds() > 60:
                         rec["last_used_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                         dirty = True
             if dirty:
                 self._save_records(records)
-        return matched_role
+        return matched
+
+    def verify_token(self, candidate: str | None) -> str | None:
+        """Verify a candidate Bearer token in constant time and return its role or None."""
+        identity = self.authenticate(candidate)
+        return identity[0] if identity else None
+
+    def active_key_count(self) -> int:
+        """Return the number of non-revoked, non-expired keys ([REQ-P2-05])."""
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            records = self._load_records()
+        return sum(1 for rec in records if not rec.get("revoked") and not self._is_expired(rec, now))
 
     def find_active(self, id_or_label: str) -> dict[str, Any] | None:
         """Return sanitized metadata for an active key by `key_id` or `label`."""
@@ -353,6 +373,15 @@ class TrellisHTTPServer:
         self.request_timeout_sec = float(request_timeout_sec)
         self._rate_lock = threading.Lock()
         self._rate_hits: dict[str, list[float]] = {}
+        self._metrics_lock = threading.Lock()
+        self._started_at = time.monotonic()
+        self._metrics: dict[str, Any] = {
+            "requests_total": 0,
+            "responses_by_status": {},
+            "requests_by_path": {},
+            "latency_total_sec": 0.0,
+        }
+        self._key_usage: dict[str, dict[str, Any]] = {}
         self.mcp_server = TrellisMCPServer(workspace_root=self.workspace_root)
         self.scheme = "https" if tls_cert and tls_key else "http"
 
@@ -378,7 +407,7 @@ class TrellisHTTPServer:
 
                 client_ip = self.client_address[0] if self.client_address else "unknown"
                 clean_path = self.path.split("?", 1)[0].rstrip("/") or "/"
-                if clean_path != "/healthz" and not parent._allow_request(client_ip):
+                if clean_path not in ("/healthz", "/readyz") and not parent._allow_request(client_ip):
                     self._send(
                         429,
                         {
@@ -464,12 +493,59 @@ class TrellisHTTPServer:
         connect_host = "127.0.0.1" if self.host in ("0.0.0.0", "::") else self.host
         return f"{self.scheme}://{connect_host}:{self.port}"
 
+    def effective_active_keys(self) -> int:
+        """Count effective active keys, including an env/passed API key not stored on disk ([REQ-P2-05])."""
+        store_count = self.key_store.active_key_count()
+        if self.api_key and not self.auto_generated_admin_key:
+            return store_count + 1
+        return store_count
+
+    def _authenticate_identity(
+        self, auth_header: str | None
+    ) -> tuple[str, str, str] | None:
+        """Return `(role, key_id, label)` for a valid Authorization header ([REQ-P2-05])."""
+        if self.api_key and verify_bearer_header(auth_header, self.api_key):
+            return ("admin", "env-admin", "env:TRELLIS_API_KEY")
+        candidate = extract_bearer_token(auth_header)
+        return self.key_store.authenticate(candidate)
+
     def _authenticate_role(self, auth_header: str | None) -> str | None:
         """Return 'admin', 'member', or None for the provided Authorization header."""
-        if self.api_key and verify_bearer_header(auth_header, self.api_key):
-            return "admin"
-        candidate = extract_bearer_token(auth_header)
-        return self.key_store.verify_token(candidate)
+        identity = self._authenticate_identity(auth_header)
+        return identity[0] if identity else None
+
+    def _record_key_usage(self, identity: tuple[str, str, str], clean_path: str) -> None:
+        role, key_id, label = identity
+        seen_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self._metrics_lock:
+            rec = self._key_usage.setdefault(
+                key_id,
+                {
+                    "key_id": key_id,
+                    "label": label,
+                    "role": role,
+                    "requests": 0,
+                    "last_path": None,
+                    "last_seen_at": None,
+                },
+            )
+            rec["label"] = label
+            rec["role"] = role
+            rec["requests"] = int(rec.get("requests", 0)) + 1
+            rec["last_path"] = clean_path
+            rec["last_seen_at"] = seen_at
+
+    def _record_metrics(
+        self, method: str, clean_path: str, status: int, elapsed_sec: float
+    ) -> None:
+        path_key = "/admin/keys/<id>" if clean_path.startswith("/admin/keys/") else clean_path
+        with self._metrics_lock:
+            self._metrics["requests_total"] = int(self._metrics["requests_total"]) + 1
+            by_status = self._metrics["responses_by_status"]
+            by_status[str(status)] = int(by_status.get(str(status), 0)) + 1
+            by_path = self._metrics["requests_by_path"]
+            by_path[path_key] = int(by_path.get(path_key, 0)) + 1
+            self._metrics["latency_total_sec"] = float(self._metrics["latency_total_sec"]) + elapsed_sec
 
     def dispatch_http(
         self,
@@ -478,7 +554,21 @@ class TrellisHTTPServer:
         headers: dict[str, str],
         body: bytes = b"",
     ) -> tuple[int, dict[str, str], bytes]:
-        """Process an HTTP request and return `(status_code, headers_dict, body_bytes)`."""
+        """Process an HTTP request, record metrics, and return `(status, headers, body)` ([REQ-P2-05])."""
+        started = time.monotonic()
+        status, resp_headers, resp_body = self._dispatch_http(method, path, headers, body)
+        clean_path = path.split("?", 1)[0].rstrip("/") or "/"
+        self._record_metrics(method, clean_path, status, time.monotonic() - started)
+        return status, resp_headers, resp_body
+
+    def _dispatch_http(
+        self,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes = b"",
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Internal request handler (wrapped by `dispatch_http` for observability)."""
         clean_path = path.split("?", 1)[0].rstrip("/") or "/"
         norm_headers = {k.lower(): v for k, v in headers.items()}
 
@@ -507,8 +597,27 @@ class TrellisHTTPServer:
                 },
             )
 
+        if method == "GET" and clean_path == "/readyz":
+            bundle_raw = json.dumps(build_remote_bundle(self.workspace_root)).encode("utf-8")
+            return _json_resp(
+                200,
+                {
+                    "status": "ready",
+                    "service": "trellis-mcp",
+                    "version": __version__,
+                    "uptime_sec": round(time.monotonic() - self._started_at, 3),
+                    "tls": self.scheme == "https",
+                    "bundle_signing": bool(self.bundle_signing_key),
+                    "active_keys": self.effective_active_keys(),
+                    "bundle_sha256": hashlib.sha256(bundle_raw).hexdigest(),
+                    "max_body_bytes": self.max_body_bytes,
+                    "rate_limit": self.rate_limit,
+                },
+            )
+
         auth_hdr = norm_headers.get("authorization")
-        role = self._authenticate_role(auth_hdr)
+        identity = self._authenticate_identity(auth_hdr)
+        role = identity[0] if identity else None
         if role is None:
             return _json_resp(
                 401,
@@ -518,6 +627,36 @@ class TrellisHTTPServer:
                 },
                 extra_headers={"WWW-Authenticate": 'Bearer realm="trellis-mcp"'},
             )
+        if identity is not None:
+            self._record_key_usage(identity, clean_path)
+
+        if method == "GET" and clean_path == "/metrics":
+            if role != "admin":
+                return _json_resp(
+                    403,
+                    {
+                        "error": "Forbidden",
+                        "message": "Administrator API key required for /metrics ([REQ-P2-05]).",
+                    },
+                )
+            with self._metrics_lock:
+                metrics_snapshot = {
+                    "requests_total": int(self._metrics["requests_total"]),
+                    "responses_by_status": dict(self._metrics["responses_by_status"]),
+                    "requests_by_path": dict(self._metrics["requests_by_path"]),
+                    "latency_total_sec": round(float(self._metrics["latency_total_sec"]), 6),
+                    "per_key": [
+                        dict(rec)
+                        for _, rec in sorted(self._key_usage.items(), key=lambda item: item[0])
+                    ],
+                }
+            total = metrics_snapshot["requests_total"]
+            metrics_snapshot["latency_avg_sec"] = (
+                round(metrics_snapshot["latency_total_sec"] / total, 6) if total else 0.0
+            )
+            metrics_snapshot["uptime_sec"] = round(time.monotonic() - self._started_at, 3)
+            metrics_snapshot["version"] = __version__
+            return _json_resp(200, metrics_snapshot)
 
         # Admin Bundle Hot-Deploy Endpoint ([REQ-MCP-09])
         if clean_path == "/admin/deploy":
