@@ -23,7 +23,7 @@
 
 ```text
 trellis/
-├── README.md                        # Project overview, MCP/A2A reference, multi-AI router, and VM deployment
+├── README.md                        # Project overview, MCP/A2A reference, multi-AI router, dashboard & VM deployment
 ├── LICENSE                          # MIT license
 ├── CHANGELOG.md                     # Release history and notable changes
 ├── CONTRIBUTING.md                  # Development workflow, tests, and PR checklist
@@ -36,9 +36,12 @@ trellis/
 ├── .env.example                     # Safe environment variable placeholders
 ├── trellis_mcp/                     # Zero-dependency Python MCP Control Plane & Installer
 │   ├── __init__.py                  # Package version (0.1.0)
-│   ├── __main__.py                  # CLI (--serve-http, --host 127.0.0.1 default, --scopes, --allowed-origin, --audit-log, etc.)
+│   ├── __main__.py                  # CLI (--serve-http, --emit-config, --sync-cache, --usage-report, --scopes, --rotate-key, etc.)
 │   ├── server.py                    # JSON-RPC 2.0 MCP server (18 tools, 17 /pb-* prompts, protocolVersion negotiation)
-│   ├── http_server.py               # Multi-threaded HTTP MCP/A2A server, mtime key cache, Origin check, lockout, dashboard
+│   ├── http_server.py               # Multi-threaded HTTP MCP/A2A server, hashed key store, Origin check, lockout, sessions
+│   ├── ui.py                        # Admin Dashboard SPA HTML/CSS/JS (dark/light themes, filters, pagination, key modals)
+│   ├── branding.py                  # Embedded Trellis favicon asset for the Admin Dashboard
+│   ├── editors.py                   # MCP config generator for VS Code, JetBrains, Cursor, Windsurf & Claude Code
 │   ├── tools.py                     # Core governance tools + Luhn PAN, JWT, Myanmar NRC/phone, IBAN, prompt-wrap guards
 │   ├── audit.py                     # Redacted JSONL request/tool audit logger (TrellisAuditLogger)
 │   ├── knowledge.py                 # vMF hyperspherical search, (cosine, kappa) confidence, anomaly gate, drift, Canary, RCA dedup
@@ -118,11 +121,26 @@ Every workflow playbook is stored canonically in `.agents/skills/pb-*/SKILL.md`,
 - **Multi-AI & Knowledge:** `/pb-route`, `/pb-synthesize`, `/pb-knowledge`
 - **Engineering, Git & Governance:** `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-test-writer`, `/pb-security-audit`, `/pb-perf-test`
 
-### 3.3 HTTP Security, Protocol & Discovery Features (`[REQ-TRL-01..06]`, `[REQ-TRL-12]`)
+### 3.3 HTTP Security, Protocol, Discovery & Admin Dashboard (`[REQ-TRL-01..06]`, `[REQ-TRL-12]`, `[REQ-P3-02..07]`)
 - **Safe Loopback Binding & Origin Check:** `--serve-http` defaults to `127.0.0.1` (`--host 0.0.0.0` explicit for VMs). Disallowed `Origin` headers on `/mcp` or `/admin/*` return `403 Forbidden` (configurable via `--allowed-origin` / `TRELLIS_ALLOWED_ORIGINS`).
-- **Brute-Force Lockout & Scoped Keys:** Repeated `401` failures trigger temporary `429 Too Many Requests` lockouts per IP. API keys accept `--scopes` (or `scopes` JSON array in `POST /admin/keys`) to restrict callable MCP tools (`403 Forbidden`).
-- **Redacted JSONL Audit Trail:** Every HTTP/MCP call writes a structured event to `.trellis-audit.jsonl` (`--audit-log`) with Bearer tokens and Luhn PANs redacted and request bodies hashed via SHA-256.
+- **Brute-Force Lockout, Hashed Keys & Scoped Access:** Repeated `401` failures trigger temporary `429 Too Many Requests` lockouts per IP. Keys are stored as salted SHA-256 hashes (`.trellis_keys.json`), support optional `--expires-days`, atomic `--rotate-key`, and `--scopes` (or `scopes` JSON array in `POST /admin/keys`) to restrict callable MCP tools (`403 Forbidden`).
+- **Redacted JSONL Audit Trail:** Every HTTP/MCP call writes a structured event to `.trellis-audit.jsonl` (`--audit-log` / `TRELLIS_AUDIT_LOG`) with bearer auth tokens and Luhn PANs redacted and request bodies hashed via SHA-256.
 - **MCP Protocol Negotiation & A2A Agent Card:** `initialize` negotiates `2025-06-18` / `2025-03-26` / `2024-11-05`; `POST /mcp` validates `MCP-Protocol-Version` (`400` if invalid); unauthenticated `GET /.well-known/agent.json` publishes the A2A agent card.
+- **Admin Key Dashboard UI (`GET /admin/dashboard` in `trellis_mcp/ui.py`):** Provides an authenticated browser console with dark/light mode toggle, collapsible sidebar, live KPI summary cards (`Active Keys`, `Needs attention keys`, `Administrators`), search + role/status filtering + pagination, and modals to generate, edit (`PATCH /admin/keys/<id>`), or revoke keys. Admin keys are exchanged via `POST /admin/session` for a 15-minute `HttpOnly`, `SameSite=Strict` cookie protected by `X-Trellis-CSRF: 1` and a per-request nonce CSP (raw keys are never stored in browser storage).
+
+| Endpoint | Auth Required | Purpose |
+| :--- | :--- | :--- |
+| `GET /healthz`, `GET /readyz` | None | Liveness probe and readiness status (TLS, uptime, active keys, bundle SHA-256) |
+| `GET /.well-known/agent.json` | None | A2A discovery agent card for `trellis-mcp` |
+| `GET /favicon.ico` | None | Embedded Trellis dashboard icon ([branding.py](./trellis_mcp/branding.py)) |
+| `GET /admin`, `GET /admin/dashboard` | None (HTML shell) | Nonce-CSP Admin Key Dashboard UI ([ui.py](./trellis_mcp/ui.py)) |
+| `GET/POST/DELETE /admin/session` | Admin key on `POST` | Inspect, create (`HttpOnly` cookie), or revoke browser admin session |
+| `POST /mcp` | `member` or `admin` API key | JSON-RPC 2.0 MCP endpoint (enforces per-key tool `scopes` & `Origin`) |
+| `GET /bundle.json`, `GET /install.sh` | `member` or `admin` API key | Signed/verified standards, rules, and `/pb-*` skill bundle + remote installer |
+| `GET /metrics` | `admin` API key / cookie | Request, latency, status, path, and per-key usage counters |
+| `GET/POST /admin/keys` | `admin` API key / cookie | List keys (masked prefixes) or generate new scoped member/admin keys |
+| `PATCH/DELETE /admin/keys/<id>` | `admin` API key / cookie | Update key label/role (`PATCH`) or immediately revoke (`DELETE`) |
+| `POST /admin/deploy` | `admin` API key + HMAC sig | Hot-reload standalone `trellis-mcp.pyz` (`X-Trellis-Signature`) |
 
 ---
 
@@ -167,14 +185,16 @@ See the full [Deployment & Release Progress Guide (`docs/deployment-guide.md`)](
      --tls-cert /path/server.crt --tls-key /path/server.key \
      --allowed-origin https://dashboard.internal
    ```
-2. **Issue Scoped or Role-Based API Keys:**
+   - **With TLS & HMAC Bundle Signing (Production):** Pass `--tls-cert`, `--tls-key`, `--bundle-signing-key`, `--allowed-origin`, and `--audit-log` (or set `TRELLIS_TLS_CERT`, `TRELLIS_TLS_KEY`, `TRELLIS_BUNDLE_SIGNING_KEY`, `TRELLIS_ALLOWED_ORIGINS`, `TRELLIS_AUDIT_LOG`, `TRELLIS_SESSION_SECRET`, `TRELLIS_SESSION_TTL_SEC`, `TRELLIS_SECURE_COOKIES`). See [`.env.example`](./.env.example) for all supported variables.
+2. **Issue, Rotate, or Revoke API Keys:**
    ```bash
    python -m trellis_mcp --generate-key team-ibanking --role member --expires-days 90 \
      --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_scan
    python -m trellis_mcp --list-keys
-   python -m trellis_mcp --rotate-key team-ibanking
+   python -m trellis_mcp --rotate-key team-ibanking --expires-days 90
    python -m trellis_mcp --revoke-key team-ibanking
    ```
+   Or manage keys interactively in your browser at `http://127.0.0.1:8080/admin/dashboard` (generate, edit label/role, filter, or revoke).
 3. **Zero-Clone Client Onboarding:**
    ```bash
    # macOS / Linux / WSL / Git Bash
@@ -190,7 +210,7 @@ See the full [Deployment & Release Progress Guide (`docs/deployment-guide.md`)](
 
 ## 6. Verification & Automated Tests
 
-Run the full requirement-linked test suite (`[REQ-MCP-01..10]`, `[REQ-P2-*]`, `[REQ-P3-*]`, `[REQ-TRL-01..15]`):
+Run the full requirement-linked test suite (`42` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..15]`):
 ```bash
 python -m unittest discover -s tests -v
 python -m trellis_mcp --sync-workspace

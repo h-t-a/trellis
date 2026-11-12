@@ -20,37 +20,46 @@ Regardless of which agentic platform, model, or workflow you use, every non-triv
 
 ## 2. Getting Started in Each Tool (Workspace & Any Device)
 
-### 2.0 Install Globally Across Your Device (`trellis-mcp`)
-To make all Trellis `/pb-*` slash skills, rules, and MCP tools available in **every project on your machine** (Antigravity IDE, Claude Code, Cursor, VS Code):
+### 2.0 Install Globally Across Your Device & Configure IDEs (`trellis-mcp`)
+To make all **17 unified `/pb-*` slash skills**, rules, and **18 MCP tools** available across projects on your machine (Antigravity IDE, Claude Code, VS Code, JetBrains, Cursor, Windsurf):
 ```bash
 # Option A: Local machine install (from a central ~/trellis clone; use `python` on Windows)
 python3 -m trellis_mcp --install-global
 
-# Validate workspace rules, skill line budgets, and YAML frontmatter
+# Validate workspace rules, skill parity, links, and YAML frontmatter
 python3 -m trellis_mcp --check
+
+# Emit editor-specific MCP config and cache standards locally
+python3 -m trellis_mcp --emit-config vscode --config-out .vscode/mcp.json
+python3 -m trellis_mcp --sync-cache
 ```
 
-#### Option B: Localhost / Private VM Hosting, Admin Key Auto-Generation & Zero-Clone Setup (`[REQ-MCP-05..08]`, `[REQ-TRL-01..03]`)
+#### Option B: Localhost / Private VM Hosting, Admin Dashboard & Zero-Clone Setup (`[REQ-MCP-05..10]`, `[REQ-P3-02..07]`, `[REQ-TRL-01..03]`)
 1. **Start Server & Auto-Generate Admin Key (`127.0.0.1` loopback default; pass `--host 0.0.0.0` explicitly on a VM):**
    ```bash
-   # Local development (loopback only, enforces Origin allowlist)
+   # Local development (loopback only, enforces Origin allowlist & redacted JSONL audit log)
    python -m trellis_mcp --serve-http --auto-generate-key --port 8080
 
-   # Shared VM hosting (explicit bind + redacted audit log)
-   python -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8080
+   # Shared VM hosting (explicit bind + TLS in production)
+   python -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8443 \
+     --tls-cert /path/server.crt --tls-key /path/server.key \
+     --allowed-origin https://dashboard.internal
    ```
-2. **As Administrator — Generate, List, or Revoke Keys for Another User or Team:**
+2. **As Administrator — Generate, Edit, Rotate, or Revoke Keys (CLI, HTTP API, or Browser Dashboard):**
+   - **Browser Admin Dashboard:** Open `http://127.0.0.1:8080/admin/dashboard` (or `https://<vm-ip>:8443/admin/dashboard`) and sign in with your admin key (`15`-minute `HttpOnly`, `SameSite=Strict`, CSRF-protected session with light/dark theme toggle, KPI cards, search/filters, and key generation/edit/revocation modals).
    ```bash
    # Via CLI on the VM (no restart required):
-   python3 -m trellis_mcp --generate-key team-ibanking --role member
+   python3 -m trellis_mcp --generate-key team-ibanking --role member --expires-days 90 \
+     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_scan
    python3 -m trellis_mcp --list-keys
+   python3 -m trellis_mcp --rotate-key team-ibanking --expires-days 90
    python3 -m trellis_mcp --revoke-key team-ibanking
 
    # Or remotely via HTTP POST /admin/keys:
    curl -s -X POST http://<vm-ip>:8080/admin/keys \
      -H "Authorization: Bearer <ADMIN_API_KEY>" \
      -H "Content-Type: application/json" \
-     -d '{"label": "team-ibanking", "role": "member"}'
+     -d '{"label": "team-ibanking", "role": "member", "expires_days": 90}'
    ```
 3. **On any teammate's machine (Zero Git Clone required):**
    ```bash
@@ -96,7 +105,7 @@ python3 -m trellis_mcp --check
 
 | Surface | Built-in / Custom Commands | Where Defined | Purpose |
 | :--- | :--- | :--- | :--- |
-| **1. Antigravity IDE Built-in Slash (`/`)** | `/plan`, `/goal`, `/compact`, `/schedule`, `/browser`, `/grill-me`, `/teamwork-preview`, `/learn`, `/boost` | Built into Antigravity IDE chat UI | Native IDE agent modes (planning, context compaction, browser, deep reasoning) |
+| **1. Antigravity IDE Built-in Slash (`/`)** | `/plan`, `/goal`, `/compact`, `/schedule`, `/browser`, `/grill-me`, `/teamwork`, `/learn`, `/boost` | Built into Antigravity IDE chat UI | Native IDE agent modes (planning, context compaction, browser, deep reasoning) |
 | **2. Claude Code CLI Built-in Slash (`/`)** | `/clear`, `/compact`, `/context`, `/cost`, `/doctor`, `/init`, `/mcp`, `/memory`, `/model`, `/permissions`, `/plan`, `/review` | Built into Claude Code CLI | Session management, token/cost inspection, permission gates |
 | **3. Trellis Custom Skills & MCP Prompts/Tools (`/pb-*` & `trellis_*`)** | `/pb-plan`, `/pb-spec`, `/pb-pipeline` (`trellis_pipeline`), `/pb-rca` (`trellis_rca`), `/pb-enhance` (`trellis_enhance`), `/pb-handoff` (`trellis_handoff`), `/pb-review` (`trellis_review`), `/pb-release-check`, `/pb-route` (`trellis_route_model`), `/pb-synthesize` (`trellis_synthesize`), `/pb-knowledge` (`trellis_search_knowledge`), `/pb-git-convention`, `/pb-data-classification` (`trellis_classify`, `trellis_scan`), `/pb-mcp-audit` (`trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`), `/pb-security-audit`, `/pb-test-writer` (`trellis_test`), `/pb-perf-test`, `trellis_budget`, `trellis_get_standard`, `trellis_doctor` | `.agents/skills/pb-*/SKILL.md`, `.claude/skills/`, `.claude/commands/`, and `trellis_mcp` MCP `prompts/*` & `tools/*` | Unified `/pb-*` engineering workflows served over MCP prompts + tools, Tier 3 redaction gates, vMF search, model routing, and Little's Law / quota guards |
 
