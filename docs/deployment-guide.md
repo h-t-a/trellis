@@ -2,7 +2,7 @@
 
 **Version:** `v0.1.0`  
 **Target Environment:** Windows VM (`<vm-ip>`, user `<domain>\<vm-user>`) or Linux VM  
-**Deployment Artifact:** `dist\trellis-mcp.pyz` (`~71 KB` single-file bundle containing all 34 code, standard, template, and skill files)  
+**Deployment Artifact:** `dist\trellis-mcp.pyz` (single-file bundle containing all code, standard, AI-BOM, template, and skill files)  
 **One-Time VM Bootstrap Script:** [`scripts/setup-vm-once.ps1`](../scripts/setup-vm-once.ps1)  
 **Recurring Deploy Pipeline Script:** [`scripts/build-and-deploy.ps1`](../scripts/build-and-deploy.ps1)
 
@@ -10,7 +10,7 @@
 
 ## 1. What We Have Already Done (Completed Milestones)
 
-Every foundational component required for local development, cross-IDE synchronization, multi-key RBAC authentication, and single-file VM deployment has been implemented and verified by automated tests (`[REQ-MCP-01]` through `[REQ-MCP-09]`):
+Every foundational and `SPEC-001` component required for local development, cross-IDE synchronization, multi-AI orchestration, RBAC/scoped authentication, and single-file VM deployment has been implemented and verified by automated tests (`[REQ-MCP-01..10]`, `[REQ-P2/P3-*]`, `[REQ-TRL-01..15]`):
 
 | Status | Requirement ID | Milestone Completed | Verified By |
 | :---: | :--- | :--- | :--- |
@@ -82,15 +82,15 @@ flowchart LR
 
 - [ ] **2. Run All Requirement-Linked Automated Tests (Local):**
   ```powershell
-  python -m unittest tests/test_trellis_mcp.py -v
+  python -m unittest discover -s tests -v
   ```
-  *Expected:* `Ran 14 tests ... OK` (Never deploy if any test fails).
+  *Expected:* `Ran 42 tests ... OK` (Never deploy if any test fails).
 
 - [ ] **3. Build the Standalone `dist\trellis-mcp.pyz` Artifact (Local):**
   ```powershell
   python -m trellis_mcp --build-pyz dist/trellis-mcp.pyz
   ```
-  *Expected:* `Built standalone single-file bundle: ...\dist\trellis-mcp.pyz (34 files, ~71 KB)`.
+  *Expected:* `Built standalone single-file bundle: ...\dist\trellis-mcp.pyz`.
   *(Note: Steps 1–3 can all be run with a single command: `.\scripts\build-and-deploy.ps1`)*
 
 - [ ] **4. Deploy `dist\trellis-mcp.pyz` to Windows VM (`<vm-ip>`):**
@@ -110,8 +110,10 @@ flowchart LR
 
 - [ ] **5. Post-Deployment Smoke Verification:**
   ```powershell
-  # 5a. Check unauthenticated health probe
+  # 5a. Check unauthenticated readiness and A2A agent card probes
   Invoke-RestMethod -Uri "http://<vm-ip>:8080/healthz"
+  Invoke-RestMethod -Uri "http://<vm-ip>:8080/readyz"
+  Invoke-RestMethod -Uri "http://<vm-ip>:8080/.well-known/agent.json"
 
   # 5b. Refresh local IDE skills/rules from the updated VM bundle (optional if skills changed)
   python -m trellis_mcp --install-remote http://<vm-ip>:8080 --api-key "<YOUR_API_KEY>"
@@ -121,11 +123,12 @@ flowchart LR
 
 ## 4. Administrator Key Operations Quick Reference
 
-All keys are stored in `C:\Trellis\.trellis_keys.json` on the VM and survive `.pyz` upgrades.
+All keys are stored in `C:\Trellis\.trellis_keys.json` on the VM and survive `.pyz` upgrades. Pass `--scopes` (or `"scopes"` JSON field) when restricting a member key to specific tools.
 
 | Operation | CLI Command on VM (`C:\Trellis`) | Remote HTTP Call from Your Workstation |
 | :--- | :--- | :--- |
 | **Issue Member Key for a User/Team** | `python C:\Trellis\trellis-mcp.pyz --generate-key <team-name> --role member` | `POST http://<vm-ip>:8080/admin/keys` with `{"label": "<team-name>", "role": "member"}` |
+| **Issue Scoped Member Key** | `python C:\Trellis\trellis-mcp.pyz --generate-key <team-name> --role member --scopes trellis_get_standard,trellis_search_knowledge` | `POST http://<vm-ip>:8080/admin/keys` with `{"label": "<team-name>", "role": "member", "scopes": ["trellis_get_standard"]}` |
 | **Issue Another Admin Key** | `python C:\Trellis\trellis-mcp.pyz --generate-key <admin-name> --role admin` | `POST http://<vm-ip>:8080/admin/keys` with `{"label": "<admin-name>", "role": "admin"}` |
 | **List All Keys (Masked)** | `python C:\Trellis\trellis-mcp.pyz --list-keys` | `GET http://<vm-ip>:8080/admin/keys` |
 | **Revoke Key Immediately** | `python C:\Trellis\trellis-mcp.pyz --revoke-key <key_id_or_label>` | `DELETE http://<vm-ip>:8080/admin/keys/<key_id_or_label>` |

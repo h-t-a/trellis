@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 from trellis_mcp import __version__
+from trellis_mcp.knowledge import tool_trellis_search_knowledge
+from trellis_mcp.pipeline import tool_trellis_pipeline, tool_trellis_synthesize
+from trellis_mcp.router import tool_trellis_route_model
 from trellis_mcp.tools import (
     PACKAGE_ROOT,
     STANDARD_FILE_MAP,
@@ -28,6 +31,8 @@ from trellis_mcp.tools import (
     tool_trellis_test,
     tool_trellis_verify,
 )
+
+SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 PROMPT_DEFINITIONS: list[dict[str, Any]] = [
     {
@@ -77,6 +82,50 @@ PROMPT_DEFINITIONS: list[dict[str, Any]] = [
         "description": "Release-level Definition of Done & Performance SLA gate.",
         "arguments": [],
     },
+    {
+        "name": "git-convention",
+        "description": "Enforce Conventional Commits, banking commit types, semantic branch names, and pre-push scans.",
+        "arguments": [],
+    },
+    {
+        "name": "pb-pipeline",
+        "description": "Multi-stage governance orchestrator with Tier 2 gates, loop halts, and cross-model review.",
+        "arguments": [
+            {"name": "target_stage", "description": "Destination pipeline stage", "required": True}
+        ],
+    },
+    {
+        "name": "pb-synthesize",
+        "description": "Multi-AI consensus and divergence synthesis matrix across multiple model responses.",
+        "arguments": [
+            {"name": "prompt", "description": "Original prompt or decision topic", "required": True}
+        ],
+    },
+    {
+        "name": "pb-route",
+        "description": "Select legally usable commercial or strict on-prem AI models based on tier and data classification.",
+        "arguments": [
+            {"name": "data_classification", "description": "Public, Internal, Confidential, or Restricted", "required": True},
+            {"name": "task_type", "description": "coding, review, research, classify, or general", "required": False},
+        ],
+    },
+    {
+        "name": "pb-knowledge",
+        "description": "Run vMF semantic search across Trellis standards and RCAs with kappa confidence and access filter.",
+        "arguments": [
+            {"name": "query", "description": "Search query", "required": True}
+        ],
+    },
+    {
+        "name": "data-classification",
+        "description": "Classify data sensitivity and run Luhn PAN, JWT, Myanmar NRC, phone, and IBAN redaction scans.",
+        "arguments": [],
+    },
+    {
+        "name": "mcp-registry-audit",
+        "description": "Audit MCP server allowlist, SHA-256/HMAC standard provenance, and cost/quota telemetry.",
+        "arguments": [],
+    },
 ]
 
 
@@ -100,6 +149,10 @@ class TrellisMCPServer:
             "trellis_mcp_registry": tool_trellis_mcp_registry,
             "trellis_verify": tool_trellis_verify,
             "trellis_analytics": tool_trellis_analytics,
+            "trellis_search_knowledge": tool_trellis_search_knowledge,
+            "trellis_route_model": tool_trellis_route_model,
+            "trellis_pipeline": tool_trellis_pipeline,
+            "trellis_synthesize": tool_trellis_synthesize,
         }
 
     def handle_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -114,7 +167,10 @@ class TrellisMCPServer:
 
         try:
             if method == "initialize":
-                protocol_version = params.get("protocolVersion", "2024-11-05")
+                requested = str(params.get("protocolVersion", "2024-11-05")).strip()
+                protocol_version = (
+                    requested if requested in SUPPORTED_PROTOCOL_VERSIONS else SUPPORTED_PROTOCOL_VERSIONS[0]
+                )
                 return self._response(
                     msg_id,
                     {

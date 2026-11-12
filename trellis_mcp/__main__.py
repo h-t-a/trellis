@@ -70,8 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
-        help="Bind host for --serve-http (default: 0.0.0.0).",
+        default="127.0.0.1",
+        help="Bind host for --serve-http (default: 127.0.0.1; pass 0.0.0.0 explicitly for VM/LAN).",
     )
     parser.add_argument(
         "--port",
@@ -108,6 +108,24 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="Optional key lifetime in days for --generate-key / --rotate-key (e.g. 90).",
+    )
+    parser.add_argument(
+        "--scopes",
+        type=str,
+        default=None,
+        help="Comma-separated permitted MCP tool names for --generate-key (default: all tools) ([REQ-TRL-03]).",
+    )
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=None,
+        help="Allowed browser Origin for /mcp and /admin/* (repeatable) ([REQ-TRL-01]).",
+    )
+    parser.add_argument(
+        "--audit-log",
+        type=Path,
+        default=None,
+        help="Path to redacted JSONL HTTP/MCP audit log (default: .trellis-audit.jsonl) ([REQ-TRL-02]).",
     )
     parser.add_argument(
         "--rotate-key",
@@ -316,8 +334,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.generate_key:
         store = TrellisKeyStore(resolved_keys_file)
+        parsed_scopes = (
+            [s.strip() for s in args.scopes.split(",") if s.strip()]
+            if args.scopes
+            else None
+        )
         created = store.generate_key(
-            label=args.generate_key, role=args.role, expires_days=args.expires_days
+            label=args.generate_key,
+            role=args.role,
+            expires_days=args.expires_days,
+            scopes=parsed_scopes,
         )
         print(json.dumps(created, indent=2))
         return 0
@@ -369,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
             rate_limit=args.rate_limit,
             rate_window_sec=args.rate_window_sec,
             request_timeout_sec=args.request_timeout,
+            allowed_origins=args.allowed_origin,
+            audit_log=args.audit_log,
         )
         http_srv.serve_forever()
         return 0

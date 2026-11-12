@@ -1,12 +1,46 @@
 {
-  "_comment": "[VERIFY format] Claude Code project settings baseline. Configure project-specific allow/deny permissions before first use on a real repository. Per Working Agreement 6, lifecycle hooks (.claude/hooks/*.sh) are NOT wired into this file until explicitly reviewed and approved; see each script in .claude/hooks/ for the intended [VERIFY] wiring block.",
+  "_comment": "Claude Code project security baseline ([REQ-TRL-07]). Blocks access to keystores/credentials/exfiltration commands and wires read-only validation hooks.",
   "permissions": {
     "allow": [],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
+      "Read(./.trellis_keys.json)",
+      "Read(~/.ssh/*)",
+      "Read(~/.aws/*)",
       "Bash(rm -rf *)",
-      "Bash(git push --force*)"
+      "Bash(git push --force*)",
+      "Bash(scp *)",
+      "Bash(nc *)",
+      "Bash(curl *-d *)",
+      "Bash(wget *--post*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/hooks/validate-bash.sh"
+          },
+          {
+            "type": "command",
+            "command": "./.claude/hooks/secret-scan.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/hooks/run-tests.sh"
+          }
+        ]
+      }
     ]
   }
 }

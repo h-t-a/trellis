@@ -1,0 +1,219 @@
+{
+  "schema": "trellis-ai-bom/v1",
+  "project": "trellis",
+  "spec": "SPEC-001",
+  "runtime": {
+    "core_dependencies": "Python >=3.9 stdlib (zero external runtime dependencies)",
+    "optional_extras": {
+      "knowledge": [
+        "numpy>=1.26 (optional vectorized acceleration for vMF cosine retrieval)"
+      ]
+    },
+    "mcp_protocol_versions": [
+      "2025-06-18",
+      "2025-03-26",
+      "2024-11-05"
+    ],
+    "a2a_agent_card": "/.well-known/agent.json"
+  },
+  "licensing_policy": {
+    "commercial_use_required": true,
+    "excluded_license_classes": [
+      "non-commercial",
+      "research-only",
+      "CC-BY-NC",
+      "AGPL-without-exception"
+    ]
+  },
+  "models": [
+    {
+      "id": "gemini/gemini-2.5-pro",
+      "provider": "google",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Google Gemini / Vertex AI Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "tier2", "spec", "review", "research", "synthesize"]
+    },
+    {
+      "id": "gemini/gemini-2.5-flash",
+      "provider": "google",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Google Gemini / Vertex AI Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "classify", "scan"]
+    },
+    {
+      "id": "anthropic/claude-sonnet-4",
+      "provider": "anthropic",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Anthropic / Bedrock / Vertex Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "tier2", "coding", "review", "synthesize"]
+    },
+    {
+      "id": "anthropic/claude-opus-4",
+      "provider": "anthropic",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Anthropic / Bedrock / Vertex Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier2", "spec", "review", "architecture"]
+    },
+    {
+      "id": "openai/gpt-5",
+      "provider": "openai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (OpenAI API Business Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "tier2", "review", "pipeline", "synthesize"]
+    },
+    {
+      "id": "openai/gpt-5-codex",
+      "provider": "openai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (OpenAI API Business Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "tier2", "coding"]
+    },
+    {
+      "id": "perplexity/sonar-pro",
+      "provider": "perplexity",
+      "deployment": "cloud-api-web-grounded",
+      "license": "Commercial API (Perplexity Enterprise / Sonar API Terms)",
+      "commercial_use": true,
+      "max_data_tier": "public",
+      "recommended_tasks": ["research", "citation-search", "spec"],
+      "notes": "Live web-grounded model; restricted to Public / non-proprietary queries."
+    },
+    {
+      "id": "perplexity/sonar-reasoning-pro",
+      "provider": "perplexity",
+      "deployment": "cloud-api-web-grounded",
+      "license": "Commercial API (Perplexity Enterprise / Sonar API Terms)",
+      "commercial_use": true,
+      "max_data_tier": "public",
+      "recommended_tasks": ["research", "reasoning", "synthesize"],
+      "notes": "Live web-grounded CoT model; restricted to Public / non-proprietary queries."
+    },
+    {
+      "id": "perplexity/sonar",
+      "provider": "perplexity",
+      "deployment": "cloud-api-web-grounded",
+      "license": "Commercial API (Perplexity Enterprise / Sonar API Terms)",
+      "commercial_use": true,
+      "max_data_tier": "public",
+      "recommended_tasks": ["research", "lookup"],
+      "notes": "Fast web-grounded lookup; restricted to Public queries."
+    },
+    {
+      "id": "xai/grok-4",
+      "provider": "xai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (xAI Enterprise / API Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "tier2", "review", "research", "synthesize"]
+    },
+    {
+      "id": "xai/grok-4-fast",
+      "provider": "xai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (xAI Enterprise / API Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "coding", "classify"]
+    },
+    {
+      "id": "xai/grok-3",
+      "provider": "xai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (xAI Enterprise / API Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "review", "general"]
+    },
+    {
+      "id": "mistral/mistral-large-latest",
+      "provider": "mistral",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Mistral AI Commercial Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier2", "review", "general"]
+    },
+    {
+      "id": "on_prem/qwen2.5-coder:32b",
+      "provider": "ollama-on-prem",
+      "deployment": "on-prem",
+      "license": "Apache-2.0",
+      "commercial_use": true,
+      "max_data_tier": "restricted",
+      "recommended_tasks": ["tier1", "tier2", "tier3", "coding", "redaction", "rca"]
+    },
+    {
+      "id": "on_prem/qwen2.5:32b",
+      "provider": "ollama-on-prem",
+      "deployment": "on-prem",
+      "license": "Apache-2.0",
+      "commercial_use": true,
+      "max_data_tier": "restricted",
+      "recommended_tasks": ["tier1", "tier2", "tier3", "research", "general"]
+    },
+    {
+      "id": "on_prem/qwen2.5:7b",
+      "provider": "ollama-on-prem",
+      "deployment": "on-prem",
+      "license": "Apache-2.0",
+      "commercial_use": true,
+      "max_data_tier": "restricted",
+      "recommended_tasks": ["tier1", "tier2", "tier3", "classify"]
+    },
+    {
+      "id": "on_prem/mistral-nemo:12b",
+      "provider": "ollama-on-prem",
+      "deployment": "on-prem",
+      "license": "Apache-2.0",
+      "commercial_use": true,
+      "max_data_tier": "restricted",
+      "recommended_tasks": ["tier1", "tier2", "tier3", "general"]
+    },
+    {
+      "id": "on_prem/llama-3.3-70b-instruct",
+      "provider": "vllm-on-prem",
+      "deployment": "on-prem",
+      "license": "Meta Llama 3.3 Community License (<700M MAU, Built with Meta Llama 3 attribution)",
+      "commercial_use": true,
+      "max_data_tier": "restricted",
+      "recommended_tasks": ["tier1", "tier2", "tier3", "review", "general"]
+    },
+    {
+      "id": "on_prem/nomic-embed-text",
+      "provider": "ollama-on-prem",
+      "deployment": "on-prem",
+      "license": "Apache-2.0",
+      "commercial_use": true,
+      "max_data_tier": "restricted",
+      "recommended_tasks": ["embedding", "vmf-search", "rca-dedup"]
+    }
+  ],
+  "security_controls": {
+    "default_bind_host": "127.0.0.1",
+    "origin_allowlist": true,
+    "audit_log": ".trellis-audit.jsonl",
+    "bruteforce_lockout": true,
+    "per_key_scopes": true,
+    "redaction_validators": [
+      "luhn_pan",
+      "jwt",
+      "mm_nrc",
+      "mm_phone",
+      "iban",
+      "secret_patterns"
+    ]
+  }
+}

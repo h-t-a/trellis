@@ -30,11 +30,14 @@ python3 -m trellis_mcp --install-global
 python3 -m trellis_mcp --check
 ```
 
-#### Option B: Private VM Hosting, Admin Key Auto-Generation & Zero-Clone Teammate Setup (`[REQ-MCP-05..08]`)
-1. **On your Private VM (Start Server & Auto-Generate Admin Key):**
+#### Option B: Localhost / Private VM Hosting, Admin Key Auto-Generation & Zero-Clone Setup (`[REQ-MCP-05..08]`, `[REQ-TRL-01..03]`)
+1. **Start Server & Auto-Generate Admin Key (`127.0.0.1` loopback default; pass `--host 0.0.0.0` explicitly on a VM):**
    ```bash
-   # Auto-generates & persists an admin key (trl_admin_...) in .trellis_keys.json (0600)
-   python3 -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8080
+   # Local development (loopback only, enforces Origin allowlist)
+   python -m trellis_mcp --serve-http --auto-generate-key --port 8080
+
+   # Shared VM hosting (explicit bind + redacted audit log)
+   python -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8080
    ```
 2. **As Administrator — Generate, List, or Revoke Keys for Another User or Team:**
    ```bash
@@ -95,7 +98,7 @@ python3 -m trellis_mcp --check
 | :--- | :--- | :--- | :--- |
 | **1. Antigravity IDE Built-in Slash (`/`)** | `/plan`, `/goal`, `/compact`, `/schedule`, `/browser`, `/grill-me`, `/teamwork-preview`, `/learn`, `/boost` | Built into Antigravity IDE chat UI | Native IDE agent modes (planning, context compaction, browser, deep reasoning) |
 | **2. Claude Code CLI Built-in Slash (`/`)** | `/clear`, `/compact`, `/context`, `/cost`, `/doctor`, `/init`, `/mcp`, `/memory`, `/model`, `/permissions`, `/plan`, `/review` | Built into Claude Code CLI | Session management, token/cost inspection, permission gates |
-| **3. Trellis Custom Skills & MCP Tools (`/pb-*` & `trellis_*`)** | `/pb-rca` (`trellis_rca`), `/pb-spec` (`trellis_spec`), `/pb-enhance` (`trellis_enhance`), `/pb-handoff` (`trellis_handoff`), `/pb-review` (`trellis_review`), `/pb-plan`, `/pb-release-check`, `trellis_budget`, `trellis_get_standard`, `trellis_doctor` | `.agents/skills/*/SKILL.md`, `.claude/skills/*/SKILL.md`, and `trellis_mcp` server | Enforced Trellis engineering workflows, Tier 3 redaction gates, and Little's Law / quota guards |
+| **3. Trellis Custom Skills & MCP Tools (`/pb-*` & `trellis_*`)** | `/pb-plan`, `/pb-spec`, `/pb-pipeline` (`trellis_pipeline`), `/pb-rca` (`trellis_rca`), `/pb-enhance` (`trellis_enhance`), `/pb-handoff` (`trellis_handoff`), `/pb-review` (`trellis_review`), `/pb-release-check`, `/pb-route` (`trellis_route_model`), `/pb-synthesize` (`trellis_synthesize`), `/pb-knowledge` (`trellis_search_knowledge`), `/git-convention`, `/data-classification` (`trellis_classify`, `trellis_scan`), `/mcp-registry-audit` (`trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`), `trellis_budget`, `trellis_get_standard`, `trellis_doctor`, `trellis_test` | `.agents/skills/*/SKILL.md`, `.claude/skills/*/SKILL.md`, `.claude/commands/*.md`, and `trellis_mcp` server | Enforced Trellis engineering workflows, Tier 3 redaction gates, vMF search, model routing, and Little's Law / quota guards |
 
 ---
 
