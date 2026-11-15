@@ -83,6 +83,7 @@ trellis/
 │   ├── decisions/                   # Architecture Decision Records (0001-single-source-of-truth.md)
 │   ├── integrations/                # Multi-IDE integration matrix (ide-matrix.md)
 │   ├── deployment-guide.md          # Completed milestones & recurring Windows/Linux VM deployment checklist
+│   ├── how-to-use.md                # Practical scenario guide: when & how to use each /pb-* skill, MCP tool & CLI flag
 │   └── onboarding.md                # Developer onboarding, 3-surface command table & VM setup
 ├── templates/                       # Review gate templates (spec, implementation-plan, walkthrough, test-plan, PR)
 └── scripts/                         # setup-vm-once.ps1, build-and-deploy.ps1 & sync-tool-configs.md
@@ -120,6 +121,18 @@ Every workflow playbook is stored canonically in `.agents/skills/pb-*/SKILL.md`,
 - **Core Lifecycle:** `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review` (unified Pre-PR & Code Review), `/pb-release-check`
 - **Multi-AI & Knowledge:** `/pb-route`, `/pb-synthesize`, `/pb-knowledge`
 - **Engineering, Git & Governance:** `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-test-writer`, `/pb-security-audit`, `/pb-perf-test`
+
+### 3.4 How to Use Trellis (Task-to-Tool Quick Guide)
+See the full workflow & JSON/CLI examples in **[How to Use Trellis (`docs/how-to-use.md`)](./docs/how-to-use.md)**:
+
+| Goal | Use Slash Skill / IDE Mode | Calls MCP Tool(s) |
+| :--- | :--- | :--- |
+| **Deep Research & Multi-AI Analysis** | `/pb-knowledge`, `/pb-route`, `/pb-synthesize` + IDE `/boost` | `trellis_search_knowledge`, `trellis_route_model`, `trellis_synthesize` |
+| **Plan & Spec a Feature (`Class M/L`)** | `/grill-me` -> `/pb-plan` -> `/pb-spec` | `trellis_budget`, `trellis_spec`, `trellis_pipeline` |
+| **Debug Bugs & Slow Endpoints** | `/pb-rca`, `/pb-enhance`, `/pb-perf-test` | `trellis_rca`, `trellis_enhance` |
+| **Write `[REQ-NNN-XX]` Tests First** | `/pb-test-writer` | `trellis_test` |
+| **Check PII, Secrets & Supply Chain** | `/pb-data-classification`, `/pb-security-audit`, `/pb-mcp-audit` | `trellis_classify`, `trellis_scan`, `trellis_mcp_registry`, `trellis_verify`, `trellis_analytics` |
+| **Commit, Review & Handoff** | `/pb-git-convention`, `/pb-review`, `/pb-release-check`, `/pb-handoff` | `trellis_review`, `trellis_doctor`, `trellis_handoff` |
 
 ### 3.3 HTTP Security, Protocol, Discovery & Admin Dashboard (`[REQ-TRL-01..06]`, `[REQ-TRL-12]`, `[REQ-P3-02..07]`)
 - **Safe Loopback Binding & Origin Check:** `--serve-http` defaults to `127.0.0.1` (`--host 0.0.0.0` explicit for VMs). Disallowed `Origin` headers on `/mcp` or `/admin/*` return `403 Forbidden` (configurable via `--allowed-origin` / `TRELLIS_ALLOWED_ORIGINS`).
