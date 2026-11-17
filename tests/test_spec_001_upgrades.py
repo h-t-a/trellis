@@ -519,6 +519,192 @@ class TestSpec001Upgrades(unittest.TestCase):
             )
             self.assertNotIn("error", got_slash, name)
 
+    def test_req_trl_16_dynamic_human_approver_resolution(self) -> None:
+        """[REQ-TRL-16] Ethical human approver resolution works across git config, env, OS fallback, and MCP tools without hardcoded HTA."""
+        import os
+        import subprocess
+        from unittest import mock
+
+        from trellis_mcp.identity import resolve_human_approver
+        from trellis_mcp.pipeline import tool_trellis_pipeline
+        from trellis_mcp.tools import tool_trellis_review, tool_trellis_spec
+
+        # 1. Explicit argument wins over everything
+        with mock.patch.dict(os.environ, {"TRELLIS_APPROVER": "Env User"}, clear=False):
+            resolved = resolve_human_approver(
+                workspace_root=REPO_ROOT,
+                explicit="May Thu",
+                authenticated_label="alice-dev",
+            )
+            self.assertEqual(resolved.name, "May Thu")
+            self.assertEqual(resolved.source, "explicit")
+
+        # 2. TRELLIS_APPROVER env override works when explicit is omitted
+        with mock.patch.dict(os.environ, {"TRELLIS_APPROVER": "Kyaw Zin"}, clear=False):
+            resolved = resolve_human_approver(workspace_root=REPO_ROOT)
+            self.assertEqual(resolved.name, "Kyaw Zin")
+            self.assertEqual(resolved.source, "env:TRELLIS_APPROVER")
+
+        # 3. Local git config user.name is resolved on customer's workspace
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            subprocess.run(["git", "init"], cwd=ws, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.name", "Customer Engineer"],
+                cwd=ws,
+                check=True,
+                capture_output=True,
+            )
+            env_clean = {
+                k: v for k, v in os.environ.items() if k not in ("TRELLIS_APPROVER", "TRELLIS_USER_NAME")
+            }
+            with mock.patch.dict(os.environ, env_clean, clear=True):
+                resolved = resolve_human_approver(workspace_root=ws)
+                self.assertEqual(resolved.name, "Customer Engineer")
+                self.assertEqual(resolved.source, "git:user.name")
+
+                paused = tool_trellis_pipeline(
+                    {
+                        "current_stage": "spec",
+                        "target_stage": "implement",
+                        "tier": 2,
+                        "human_approved": False,
+                    },
+                    workspace_root=ws,
+                )
+                self.assertIn("Customer Engineer", paused["content"][0]["text"])
+
+                looped = tool_trellis_pipeline(
+                    {
+                        "current_stage": "implement",
+                        "target_stage": "implement",
+                        "history": ["edit:a", "edit:a", "edit:a"],
+                    },
+                    workspace_root=ws,
+                )
+                loop_text = looped["content"][0]["text"]
+                self.assertIn("Customer Engineer", loop_text)
+                self.assertNotIn("(`HTA`)", loop_text)
+
+                spec_res = tool_trellis_spec(
+                    {
+                        "spec_id": "SPEC-099",
+                        "title": "Dynamic Approver",
+                        "problem": "Need accurate customer approver naming.",
+                        "requirements": ["Resolve git config user.name ethically"],
+                    },
+                    workspace_root=ws,
+                )
+                self.assertIn("Customer Engineer", spec_res["content"][0]["text"])
+
+                rev_res = tool_trellis_review(
+                    {"diff_text": "+print('hello')\n"},
+                    workspace_root=ws,
+                )
+                self.assertIn("Customer Engineer", rev_res["content"][0]["text"])
+
+        # 4. Graceful fallback to OS user / Human Reviewer when git config is unavailable
+        with tempfile.TemporaryDirectory() as tmp:
+            env_clean = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("TRELLIS_APPROVER", "TRELLIS_USER_NAME", "USER", "USERNAME")
+            }
+            with (
+                mock.patch.dict(os.environ, env_clean, clear=True),
+                mock.patch("trellis_mcp.identity._read_git_user_name", return_value=None),
+                mock.patch("trellis_mcp.identity._read_os_user_name", return_value=("Fallback Dev", "os:display_name")),
+            ):
+                resolved = resolve_human_approver(workspace_root=Path(tmp))
+                self.assertEqual(resolved.name, "Fallback Dev")
+                self.assertEqual(resolved.source, "os:display_name")
+
+            with (
+                mock.patch.dict(os.environ, env_clean, clear=True),
+                mock.patch("trellis_mcp.identity._read_git_user_name", return_value=None),
+                mock.patch("trellis_mcp.identity._read_os_user_name", return_value=(None, "")),
+            ):
+                resolved = resolve_human_approver(workspace_root=Path(tmp))
+                self.assertEqual(resolved.name, "Human Reviewer")
+                self.assertEqual(resolved.source, "fallback")
+
+    def test_req_trl_16_remote_http_approver_isolation_and_no_hardcoded_hta(self) -> None:
+        """[REQ-TRL-16] Remote HTTP MCP attributes named API key label instead of VM host git config, and skills/templates have no hardcoded HTA approver."""
+        import os
+        from unittest import mock
+
+        from trellis_mcp.http_server import TrellisHTTPServer, TrellisKeyStore
+        from trellis_mcp.identity import resolve_human_approver
+
+        # Remote mode with generic label never leaks VM local git config or OS user
+        env_clean = {
+            k: v for k, v in os.environ.items() if k not in ("TRELLIS_APPROVER", "TRELLIS_USER_NAME")
+        }
+        with mock.patch.dict(os.environ, env_clean, clear=True):
+            remote_generic = resolve_human_approver(
+                workspace_root=REPO_ROOT,
+                authenticated_label="env:TRELLIS_API_KEY",
+                remote_mode=True,
+            )
+            self.assertEqual(remote_generic.name, "Human Reviewer")
+            self.assertEqual(remote_generic.source, "fallback")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keys_file = Path(tmp) / ".trellis_keys.json"
+            store = TrellisKeyStore(keys_file)
+            alice = store.generate_key("alice-dev", role="member")
+            test_admin_key = "test-placeholder-admin"
+
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=test_admin_key,
+                workspace_root=REPO_ROOT,
+                keys_file=keys_file,
+            ) as http_srv:
+                req = Request(
+                    f"{http_srv.base_url}/mcp",
+                    data=json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 10,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "trellis_pipeline",
+                                "arguments": {
+                                    "current_stage": "spec",
+                                    "target_stage": "implement",
+                                    "tier": 2,
+                                    "human_approved": False,
+                                },
+                            },
+                        }
+                    ).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {alice['api_key']}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with http_srv.open_request(req) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                text = body["result"]["content"][0]["text"]
+                self.assertIn("alice-dev", text)
+                self.assertIn("auth:key_label", text)
+
+        # Verify rules, skills, commands, and templates no longer hardcode HTA as approver
+        files_to_check = [
+            REPO_ROOT / ".agents" / "rules" / "standards.md",
+            REPO_ROOT / "templates" / "spec-template.md",
+            REPO_ROOT / "templates" / "implementation-plan.md",
+            *sorted((REPO_ROOT / ".agents" / "skills").glob("*/SKILL.md")),
+            *sorted((REPO_ROOT / ".claude" / "skills").glob("*/SKILL.md")),
+            *sorted((REPO_ROOT / ".claude" / "commands").glob("*.md")),
+        ]
+        for path in files_to_check:
+            content = path.read_text(encoding="utf-8")
+            self.assertNotIn("HTA", content, f"Hardcoded HTA approver found in {path}")
+
 
 if __name__ == "__main__":
     unittest.main()

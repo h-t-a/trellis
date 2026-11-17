@@ -1,6 +1,6 @@
 # Implementation Plan: `[Feature / Change Title]`
 
-- **Author / Developer:** `[Name]`
+- **Author / Developer:** `[Developer Name / git config user.name]`
 - **Date:** `[YYYY-MM-DD]`
 - **Ticket / Requirement ID:** `[TICKET-ID]`
 - **AI Tool Used:** `[Claude Code / Antigravity IDE]`
@@ -59,4 +59,4 @@
 - **Developer Critique Notes (Skill-Growth Practice):**
   - *What I changed or corrected in the AI's initial plan before approving:* `[Notes]`
 - **Human Plan Approval:**
-  - [ ] Approved by `[Reviewer Name]` on `[YYYY-MM-DD]`
+  - [ ] Approved by `[Approver Name / git config user.name]` on `[YYYY-MM-DD]`

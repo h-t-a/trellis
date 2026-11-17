@@ -23,4 +23,4 @@ description: Write or validate a requirement-traceable specification (Class M 4-
 3. **Ask Only Blocking Questions & Cross-Check (`trellis_synthesize`):**
    - Ask at most 3 high-impact clarifying questions; for high-risk Class L specs, optionally compare multi-model reviews with `trellis_synthesize` to highlight architecture divergences.
 4. **STOP for Tier 2 Human Approval:**
-   - Wait for explicit approval (`HTA` / reviewer) before writing production code.
+   - Wait for explicit approval from the resolved human approver (`trellis_spec` / `git config user.name` / named reviewer) before writing production code.

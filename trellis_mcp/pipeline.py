@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from trellis_mcp import __version__
+from trellis_mcp.identity import resolve_approver_from_args
 from trellis_mcp.tools import _err, _ok
 
 PIPELINE_STAGES: tuple[str, ...] = ("research", "plan", "spec", "implement", "review", "deploy")
@@ -67,6 +68,7 @@ def tool_trellis_pipeline(
     writer_model = str(args.get("writer_model", "")).strip()
     reviewer_model = str(args.get("reviewer_model", "")).strip()
     cross_model_review = bool(args.get("cross_model_review", True))
+    approver = resolve_approver_from_args(args, workspace_root)
 
     counts = Counter(history)
     repeated_step = next((step for step, cnt in counts.items() if cnt >= 3), None)
@@ -81,8 +83,9 @@ def tool_trellis_pipeline(
 
 - **Status:** **LOOP_DETECTED**
 - **Current Stage:** `{current_stage}` -> **Target:** `{target_stage}`
+- **Approver / Operator:** `{approver.name}` (`{approver.source}`)
 - **Reason:** {reason}
-- **Action Required:** Halt automated retries and escalate to human operator (`HTA`).
+- **Action Required:** Halt automated retries and escalate to human operator (`{approver.name}`).
 """
         )
 
@@ -93,7 +96,8 @@ def tool_trellis_pipeline(
 - **Status:** **PAUSED_FOR_APPROVAL**
 - **Transition:** `{current_stage}` -> `{target_stage}`
 - **AI Boundary Tier:** `Tier {tier}`
-- **Action Required:** Human approval (`human_approved=true`) is mandatory before entering `{target_stage}`.
+- **Approver:** `{approver.name}` (`{approver.source}`)
+- **Action Required:** Human approval (`human_approved=true`) from `{approver.name}` is mandatory before entering `{target_stage}`.
 """
         )
 
@@ -115,6 +119,7 @@ def tool_trellis_pipeline(
 - **Status:** **READY_TO_ADVANCE**
 - **Transition:** `{current_stage}` -> `{target_stage}`
 - **AI Boundary Tier:** `Tier {tier}` (Human Approved: `{human_approved}`)
+- **Approver:** `{approver.name}` (`{approver.source}`)
 - **Writer Model:** `{writer_model or "unspecified"}` | **Reviewer Model:** `{reviewer_model or "unspecified"}`
 - **History Steps:** `{len(history)}/{max_steps}`
 """

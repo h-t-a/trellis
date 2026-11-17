@@ -13,7 +13,7 @@ description: Orchestrate the end-to-end Trellis stage state machine (discover ->
 ## Execution Steps
 
 1. **Check Stage Transition via `trellis_pipeline`:**
-   - Pass `current_stage`, `target_stage`, `tier` (`1`–`3`), `human_approved`, `writer_model`, `reviewer_model`, `cross_model_review`, and recent `history`.
+   - Pass `current_stage`, `target_stage`, `tier` (`1`–`3`), `human_approved`, optional `approver` (auto-resolved ethically from `git config user.name` / API key label if omitted), `writer_model`, `reviewer_model`, `cross_model_review`, and recent `history`.
 2. **Enforce Fail-Closed Governance Gates:**
    - **Tier 2/3 Approval Gate:** Do not enter `implement` on Tier 2+ work without explicit human approval (`PAUSED_FOR_APPROVAL`).
    - **Loop Breaker (`LOOP_DETECTED`):** If 3 consecutive retries share the same error signature or edited block, halt edits and escalate to `/pb-rca` or human guidance.

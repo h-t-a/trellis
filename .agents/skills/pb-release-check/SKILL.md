@@ -21,4 +21,4 @@ description: Verify release readiness against the Release-level Definition of Do
 3. **Human Migration Review & Rollback Plan (Tier 2):**
    - Confirm a human engineer reviewed all database migrations and schema changes and that the rollback procedure is documented and tested.
 4. **Monitoring & Named Owner Sign-Off (Tier 3 Boundary):**
-   - Confirm monitoring and alerts are active and record sign-off by the named release owner (`HTA` / release lead; AI is excluded from prod deployment and financial/ledger sign-off per Tier 3).
+   - Confirm monitoring and alerts are active and record sign-off by the named release owner (resolved ethically via `git config user.name` or explicit release lead; AI is excluded from prod deployment and financial/ledger sign-off per Tier 3).
