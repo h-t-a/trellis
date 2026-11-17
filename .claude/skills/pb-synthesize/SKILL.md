@@ -17,4 +17,4 @@ description: Combine independent answers from multiple AI models into an explici
    - Call `trellis_synthesize` with `prompt` and `responses`.
    - Never collapse disagreements by silent majority vote; surface explicit **Agreements**, **Divergences**, confidence spread, and cited evidence.
 3. **Human Escalation on High Divergence:**
-   - When models conflict on security, financial logic, or architectural trade-offs, present the divergence table to the human reviewer (`HTA`) for the final decision.
+   - When models conflict on security, financial logic, or architectural trade-offs, present the divergence table to the named human reviewer (resolved via `git config user.name` or active user) for the final decision.

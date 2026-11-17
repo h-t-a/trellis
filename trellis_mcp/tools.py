@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from trellis_mcp.identity import resolve_approver_from_args
+
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 STANDARD_FILE_MAP: dict[str, str] = {
@@ -745,6 +747,8 @@ def tool_trellis_spec(
     requirements: list[str] = list(args.get("requirements") or ["Define testable requirement"])
     non_goals: list[str] = list(args.get("non_goals") or ["Out-of-scope refactors or schema changes"])
     affected_files: list[str] = list(args.get("affected_files") or ["<path/to/file>"])
+    author = resolve_approver_from_args(args, workspace_root, keys=("author", "approver", "reviewer"))
+    approver = resolve_approver_from_args(args, workspace_root, keys=("approver", "reviewer", "author"))
 
     digits_match = re.search(r"(\d+)", spec_id)
     spec_num = digits_match.group(1).zfill(3) if digits_match else "001"
@@ -764,8 +768,10 @@ def tool_trellis_spec(
 
     spec_md = f"""# {spec_id}: {title}
 
+- **Author:** `{author.name}` (`{author.source}`)
 - **Task Class:** `Class {task_class}`
 - **Status:** `DRAFT`
+- **Human Approval:** [ ] Approved by `{approver.name}` (`{approver.source}`) on `[YYYY-MM-DD]`
 
 ---
 
@@ -960,6 +966,7 @@ def tool_trellis_review(
         )
 
     verdict = "FAIL" if issues else "PASS"
+    reviewer = resolve_approver_from_args(args, workspace_root, keys=("reviewer", "approver", "author"))
     findings_block = (
         "\n".join(f"- {item}" for item in issues)
         if issues
@@ -970,6 +977,7 @@ def tool_trellis_review(
         f"""# Trellis Pre-PR Code Review Report
 
 - **Verdict:** **{verdict}**
+- **Reviewer / Approver:** `{reviewer.name}` (`{reviewer.source}`)
 - **Checked Spec IDs:** `{', '.join(spec_req_ids) if spec_req_ids else 'None specified'}`
 
 ## Findings
@@ -1699,6 +1707,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "non_goals": {"type": "array", "items": {"type": "string"}},
                 "affected_files": {"type": "array", "items": {"type": "string"}},
+                "author": {"type": "string", "description": "Optional spec author name (auto-resolved from git config user.name if omitted)."},
+                "approver": {"type": "string", "description": "Optional human approver name (auto-resolved from git config user.name if omitted)."},
             },
             "required": ["spec_id", "title", "problem", "requirements"],
         },
@@ -1762,6 +1772,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "List of [REQ-NNN-XX] IDs that must be covered in the diff.",
                 },
+                "reviewer": {"type": "string", "description": "Optional human reviewer/approver name (auto-resolved from git config user.name if omitted)."},
             },
             "required": ["diff_text"],
         },
@@ -1913,6 +1924,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "writer_model": {"type": "string"},
                 "reviewer_model": {"type": "string"},
                 "cross_model_review": {"type": "boolean"},
+                "approver": {"type": "string", "description": "Optional human approver name (auto-resolved from git config user.name or API key label if omitted)."},
             },
             "required": ["current_stage", "target_stage"],
         },

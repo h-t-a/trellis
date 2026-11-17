@@ -1479,6 +1479,8 @@ class TrellisHTTPServer:
                     )
                 return None
 
+            caller_label = identity[2] if identity is not None else None
+
             if isinstance(payload, list):
                 for item in payload:
                     if isinstance(item, dict) and (err := _scope_error(item)) is not None:
@@ -1487,14 +1489,21 @@ class TrellisHTTPServer:
                     resp
                     for item in payload
                     if isinstance(item, dict)
-                    and (resp := self.mcp_server.handle_request(item)) is not None
+                    and (
+                        resp := self.mcp_server.handle_request(
+                            item, caller_label=caller_label, remote_mode=True
+                        )
+                    )
+                    is not None
                 ]
                 return _json_resp(200, responses)
 
             if isinstance(payload, dict) and (err := _scope_error(payload)) is not None:
                 return err
 
-            response = self.mcp_server.handle_request(payload)
+            response = self.mcp_server.handle_request(
+                payload, caller_label=caller_label, remote_mode=True
+            )
             if response is None:
                 return 202, {"Content-Length": "0"}, b""
             return _json_resp(200, response)

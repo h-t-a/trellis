@@ -2,7 +2,7 @@
 
 - **Spec ID:** `SPEC-[NNN]`
 - **Title:** `[Feature or Enhancement Title]`
-- **Author:** `[HTA / Developer Name]`
+- **Author:** `[Developer Name / git config user.name]`
 - **Date:** `[YYYY-MM-DD]`
 - **Task Cost Class ([docs/standards/quota-efficiency.md](../docs/standards/quota-efficiency.md)):** `[Class M: Micro-Spec | Class L: Full Spec]`
 - **AI Boundary Tier ([docs/standards/ai-boundary.md](../docs/standards/ai-boundary.md)):** `[Tier 1 | Tier 2: Human Approval Required]`
@@ -75,4 +75,4 @@ Every requirement must carry a unique `[REQ-NNN-XX]` ID that will be cited in au
 ### 10. Open Questions & Human Sign-Off
 - **Open Questions:** `[Must be resolved before implementation starts]`
 - **Human Approval:**
-  - [ ] Approved by `HTA` on `[YYYY-MM-DD]`
+  - [ ] Approved by `[Approver Name / git config user.name]` on `[YYYY-MM-DD]`

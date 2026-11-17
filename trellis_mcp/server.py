@@ -215,7 +215,13 @@ class TrellisMCPServer:
             "trellis_synthesize": tool_trellis_synthesize,
         }
 
-    def handle_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
+    def handle_request(
+        self,
+        message: dict[str, Any],
+        *,
+        caller_label: str | None = None,
+        remote_mode: bool = False,
+    ) -> dict[str, Any] | None:
         """Process a single JSON-RPC 2.0 request or notification."""
         method = str(message.get("method", ""))
         msg_id = message.get("id")
@@ -259,6 +265,10 @@ class TrellisMCPServer:
                 handler = self._tool_dispatch.get(tool_name)
                 if not handler:
                     return self._error(msg_id, -32601, f"Unknown tool: {tool_name}")
+                if remote_mode:
+                    tool_args.setdefault("_remote_mode", True)
+                if caller_label:
+                    tool_args.setdefault("_auth_label", caller_label)
                 result = handler(tool_args, self.workspace_root)
                 return self._response(msg_id, result)
 
