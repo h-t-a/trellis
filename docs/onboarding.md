@@ -21,7 +21,7 @@ Regardless of which agentic platform, model, or workflow you use, every non-triv
 ## 2. Getting Started in Each Tool (Workspace & Any Device)
 
 ### 2.0 Install Globally Across Your Device & Configure IDEs (`trellis-mcp`)
-To make all **17 unified `/pb-*` slash skills**, rules, and **18 MCP tools** available across projects on your machine (Antigravity IDE, Claude Code, VS Code, JetBrains, Cursor, Windsurf):
+To make all **18 unified `/pb-*` slash skills**, rules, and **18 MCP tools** available across projects on your machine (Antigravity IDE, Claude Code, VS Code, JetBrains, Cursor, Windsurf):
 ```bash
 # Option A: Local machine install (from a central ~/trellis clone; use `python` on Windows)
 python3 -m trellis_mcp --install-global
@@ -107,7 +107,7 @@ python3 -m trellis_mcp --sync-cache
 | :--- | :--- | :--- | :--- |
 | **1. Antigravity IDE Built-in Slash (`/`)** | `/plan`, `/goal`, `/compact`, `/schedule`, `/browser`, `/grill-me`, `/teamwork`, `/learn`, `/boost` | Built into Antigravity IDE chat UI | Native IDE agent modes (planning, context compaction, browser, deep reasoning) |
 | **2. Claude Code CLI Built-in Slash (`/`)** | `/clear`, `/compact`, `/context`, `/cost`, `/doctor`, `/init`, `/mcp`, `/memory`, `/model`, `/permissions`, `/plan`, `/review` | Built into Claude Code CLI | Session management, token/cost inspection, permission gates |
-| **3. Trellis Custom Skills & MCP Prompts/Tools (`/pb-*` & `trellis_*`)** | `/pb-plan`, `/pb-spec`, `/pb-pipeline` (`trellis_pipeline`), `/pb-rca` (`trellis_rca`), `/pb-enhance` (`trellis_enhance`), `/pb-handoff` (`trellis_handoff`), `/pb-review` (`trellis_review`), `/pb-release-check`, `/pb-route` (`trellis_route_model`), `/pb-synthesize` (`trellis_synthesize`), `/pb-knowledge` (`trellis_search_knowledge`), `/pb-git-convention`, `/pb-data-classification` (`trellis_classify`, `trellis_scan`), `/pb-mcp-audit` (`trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`), `/pb-security-audit`, `/pb-test-writer` (`trellis_test`), `/pb-perf-test`, `trellis_budget`, `trellis_get_standard`, `trellis_doctor` | `.agents/skills/pb-*/SKILL.md`, `.claude/skills/`, `.claude/commands/`, and `trellis_mcp` MCP `prompts/*` & `tools/*` | Unified `/pb-*` engineering workflows served over MCP prompts + tools, Tier 3 redaction gates, vMF search, model routing, and Little's Law / quota guards |
+| **3. Trellis Custom Skills & MCP Prompts/Tools (`/pb-*` & `trellis_*`)** | `/pb-plan`, `/pb-spec`, `/pb-pipeline` (`trellis_pipeline`), `/pb-rca` (`trellis_rca`), `/pb-enhance` (`trellis_enhance`), `/pb-handoff` (`trellis_handoff`), `/pb-review` (`trellis_review`), `/pb-release-check`, `/pb-route` (`trellis_route_model`), `/pb-synthesize` (`trellis_synthesize`), `/pb-knowledge` (`trellis_search_knowledge`), `/pb-git-convention`, `/pb-data-classification` (`trellis_classify`, `trellis_scan`), `/pb-mcp-audit` (`trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`), `/pb-security-audit`, `/pb-test-writer` (`trellis_test`), `/pb-perf-test`, `/pb-doc`, `trellis_budget`, `trellis_get_standard`, `trellis_doctor` | `.agents/skills/pb-*/SKILL.md`, `.claude/skills/`, `.claude/commands/`, and `trellis_mcp` MCP `prompts/*` & `tools/*` | Unified `/pb-*` engineering workflows served over MCP prompts + tools, Tier 3 redaction gates, vMF search, model routing, and Little's Law / quota guards |
 
 ---
 

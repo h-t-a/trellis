@@ -31,6 +31,7 @@ This guide explains **how to use Trellis in daily work** and **which slash skill
 | **Audit security & AI boundary compliance** | `/pb-security-audit` | `trellis_scan`, `trellis_classify`, `trellis_mcp_registry` |
 | **Save state before `/clear` or `/compact`** | `/pb-handoff` | `trellis_handoff` |
 | **Commit & push cleanly (Conventional Commits)** | `/pb-git-convention` | `trellis_scan`, `trellis_review` |
+| **Audit or scaffold project documentation (Diátaxis, ADRs, CI)** | `/pb-doc` | `trellis_get_standard`, `trellis_doctor`, `trellis_scan` |
 | **Pre-PR & release gate review** | `/pb-review`, `/pb-release-check` | `trellis_review`, `trellis_doctor`, `trellis_scan` |
 
 ---
