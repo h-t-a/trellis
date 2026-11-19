@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Documentation Standard, Thin Rules & `/pb-doc` Skill (`[REQ-DOC-01..06]`):**
+  - Added canonical `docs/standards/documentation-standard.md` covering Diátaxis separation, Git Docs-as-Code & wiki boundaries, C4/arc42/ADRs, API/DB/IaC/UI/code/ML contracts, SRE runbooks vs. playbooks, CI quality gates, `AGENTS.md` / `/llms.txt` v2, and an ISO/IEC/IEEE 29148:2018 & IEEE 1016-2009 compliance appendix.
+  - Added always-on workspace rule `.agents/rules/documentation.md`, modular rule `.claude/rules/documentation.md`, and the 18th unified skill `/pb-doc` (`.agents/skills/pb-doc/SKILL.md`, synced via `--sync-workspace` and exposed via MCP `prompts/*`).
+  - Registered `documentation-standard` and `data-classification` in `docs/standards/standards.json` and `STANDARD_FILE_MAP`.
 - **SPEC-001 Security, Audit & Protocol Hardening (`[REQ-TRL-01..07]`):**
   - Loopback bind default (`127.0.0.1`), `Origin` allowlist checks (`403`) on `/mcp` and `/admin/*`, and `--allowed-origin` CLI flag.
   - Redacted JSONL audit logging (`trellis_mcp/audit.py`, `--audit-log`) stripping Bearer tokens and Luhn PANs.
@@ -40,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed silent `KeyError` in `tool_trellis_rca` (`similarity`/`summary` -> `cosine`/`excerpt`) so `## 5. Similar Prior RCAs` renders cleanly (`[REQ-TRL-10]`).
+- Expanded `trellis_mcp/knowledge.py` corpus indexing to cover root docs (`README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`), `templates/*.md`, `docs/integrations/*.md`, and `docs/how-to-use.md` with `**Classification:**` metadata parsing.
+- Aligned `tool_trellis_spec` Part A and Part B headings with `templates/spec-template.md`, extended `tool_trellis_doctor` to check `GEMINI.md` line budgets, root docs, and local `#heading` anchors, and fixed `README.md` section ordering (`3.2 -> 3.3 -> 3.4`).
 - `.claude/commands/*.md` relative links now resolve after skill mirroring.
 - `docs/deployment-guide.md` no longer links to an unbuilt `dist/` artifact.
 

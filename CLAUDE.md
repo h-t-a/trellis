@@ -25,6 +25,7 @@ All authoritative policies live in `docs/standards/`. Do not duplicate their pro
 - **Security Baseline:** @docs/standards/security-baseline.md
 - **Git & Commit Convention:** @docs/standards/git-convention.md
 - **Data Classification:** @docs/standards/data-classification.md
+- **Documentation Standard:** @docs/standards/documentation-standard.md
 
 Supporting references:
 - **Approved Model AI-BOM:** @docs/standards/ai-bom.json
@@ -36,8 +37,8 @@ Supporting references:
 
 ## 3. How the Standard Is Organized in Claude Code
 
-1. **Modular Rules (`.claude/rules/*.md`):** Automatically discovered, concise pointers (< 60 lines each) covering [code-style.md](./.claude/rules/code-style.md), [testing.md](./.claude/rules/testing.md), [api-conventions.md](./.claude/rules/api-conventions.md), [security.md](./.claude/rules/security.md), and [git-convention.md](./.claude/rules/git-convention.md).
-2. **Slash Commands, Unified `/pb-*` Skills & MCP Prompts:** 17 canonical runbooks stored in `.agents/skills/pb-*/SKILL.md`, synced to `.claude/skills/` & `.claude/commands/pb-*.md` (`python -m trellis_mcp --sync-workspace`), and exposed directly over MCP (`prompts/list` / `prompts/get`): `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review`, `/pb-release-check`, `/pb-route`, `/pb-synthesize`, `/pb-knowledge`, `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-security-audit`, `/pb-test-writer`, and `/pb-perf-test`.
+1. **Modular Rules (`.claude/rules/*.md`):** Automatically discovered, concise pointers (< 60 lines each) covering [code-style.md](./.claude/rules/code-style.md), [testing.md](./.claude/rules/testing.md), [api-conventions.md](./.claude/rules/api-conventions.md), [security.md](./.claude/rules/security.md), [git-convention.md](./.claude/rules/git-convention.md), and [documentation.md](./.claude/rules/documentation.md).
+2. **Slash Commands, Unified `/pb-*` Skills & MCP Prompts:** 18 canonical runbooks stored in `.agents/skills/pb-*/SKILL.md`, synced to `.claude/skills/` & `.claude/commands/pb-*.md` (`python -m trellis_mcp --sync-workspace`), and exposed directly over MCP (`prompts/list` / `prompts/get`): `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review`, `/pb-release-check`, `/pb-route`, `/pb-synthesize`, `/pb-knowledge`, `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-security-audit`, `/pb-test-writer`, `/pb-perf-test`, and `/pb-doc`.
 3. **MCP Server (`trellis-mcp` in `.mcp.json`):** Zero-dependency Python MCP server exposing 18 tools (`trellis_get_standard`, `trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_handoff`, `trellis_review`, `trellis_doctor`, `trellis_test`, `trellis_scan`, `trellis_classify`, `trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`, `trellis_search_knowledge`, `trellis_route_model`, `trellis_pipeline`, `trellis_synthesize`) and A2A discovery (`/.well-known/agent.json`).
 4. **Subagents (`.claude/agents/*.md`):** Isolated specialist agents with minimum required tools: read-only `code-reviewer` and `security-auditor`, plus `test-writer`.
 5. **Security Permissions & Hooks (`.claude/settings.json` & `.claude/hooks/*.sh`):** Deny rules block `.env*`, `.trellis_keys.json`, `~/.ssh/*`, `~/.aws/*`, and exfiltration commands (`scp`, `nc`, `curl -d`, `wget --post`); `PreToolUse` (`validate-bash.sh`, `secret-scan.sh`) and `Stop` (`run-tests.sh`) hooks are wired in `.claude/settings.json`.

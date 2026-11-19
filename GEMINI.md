@@ -16,6 +16,7 @@ This repository follows the **`ai-dev-playbook` (Trellis) v0.1 + SPEC-001** stan
 - [Security Baseline](./docs/standards/security-baseline.md)
 - [Git & Commit Convention](./docs/standards/git-convention.md)
 - [Data Classification Standard](./docs/standards/data-classification.md)
+- [Documentation Standard](./docs/standards/documentation-standard.md)
 - [Approved Multi-AI Catalog (`ai-bom.json`)](./docs/standards/ai-bom.json)
 - [SPEC-001: Secure Multi-AI Trellis Upgrade](./docs/specs/001-secure-multi-ai-trellis.md)
 - [Developer Onboarding Guide](./docs/onboarding.md)
@@ -28,6 +29,6 @@ This repository follows the **`ai-dev-playbook` (Trellis) v0.1 + SPEC-001** stan
 4. **Git & Commit Discipline:** Follow [git-convention.md](./docs/standards/git-convention.md) and `/pb-git-convention` (`<type>(<scope>): <imperative summary>`, max 72 chars, lowercase subject, no trailing period, semantic branches `<type>/<name>`).
 5. **Walkthrough Gate:** After implementation, produce a **Walkthrough artifact** following [templates/walkthrough.md](./templates/walkthrough.md) stating what changed, verification results, and where AI was used.
 6. **Customizations & `trellis-mcp` Server:**
-   - **Rules (`.agents/rules/*.md`):** `standards.md`, `git-convention.md`, and `quota-efficiency.md` (with `trigger: always_on` YAML frontmatter).
-   - **Unified Skills / MCP Prompts (`.agents/skills/pb-*/SKILL.md` — 17 `/pb-*` skills served directly via MCP `prompts/list` & `prompts/get`):** `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review`, `/pb-release-check`, `/pb-route`, `/pb-synthesize`, `/pb-knowledge`, `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-security-audit`, `/pb-test-writer`, and `/pb-perf-test`.
+   - **Rules (`.agents/rules/*.md`):** `standards.md`, `git-convention.md`, `quota-efficiency.md`, and `documentation.md` (with `trigger: always_on` YAML frontmatter).
+   - **Unified Skills / MCP Prompts (`.agents/skills/pb-*/SKILL.md` — 18 `/pb-*` skills served directly via MCP `prompts/list` & `prompts/get`):** `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review`, `/pb-release-check`, `/pb-route`, `/pb-synthesize`, `/pb-knowledge`, `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-security-audit`, `/pb-test-writer`, `/pb-perf-test`, and `/pb-doc`.
    - **MCP Server (`trellis-mcp` — 18 tools):** `trellis_get_standard`, `trellis_rca`, `trellis_spec`, `trellis_enhance`, `trellis_budget`, `trellis_handoff`, `trellis_review`, `trellis_doctor`, `trellis_test`, `trellis_scan`, `trellis_classify`, `trellis_mcp_registry`, `trellis_verify`, `trellis_analytics`, `trellis_search_knowledge`, `trellis_route_model`, `trellis_pipeline`, and `trellis_synthesize` (`python -m trellis_mcp --install-global`).

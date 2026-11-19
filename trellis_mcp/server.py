@@ -142,6 +142,14 @@ PROMPT_DEFINITIONS: list[dict[str, Any]] = [
         "description": "Design, size, and evaluate performance tests using Performance SLA Standard and Little's Law.",
         "arguments": [],
     },
+    {
+        "name": "pb-doc",
+        "description": "Audit, scaffold, and validate project documentation across Diátaxis, ADRs, C4/arc42, contracts, SRE runbooks, AGENTS.md, and CI gates.",
+        "arguments": [
+            {"name": "mode", "description": "audit, scaffold, or gate", "required": False},
+            {"name": "target_path", "description": "Repository or directory path to audit/scaffold", "required": False},
+        ],
+    },
 ]
 
 

@@ -24,7 +24,7 @@ python -m unittest discover -s tests -v
 
 - Add a failing test first (`trellis_test` can generate a skeleton), then implement.
 - Use requirement IDs in test names and docstrings (`[REQ-NNN-XX]`).
-- Run the full suite (`42` tests across `test_trellis_mcp.py` and `test_spec_001_upgrades.py`) before pushing: `python -m unittest discover -s tests -v`.
+- Run the full suite (`47` tests across `test_trellis_mcp.py` and `test_spec_001_upgrades.py`) before pushing: `python -m unittest discover -s tests -v`.
 
 ## Commit Convention
 

@@ -495,6 +495,7 @@ class TestSpec001Upgrades(unittest.TestCase):
             "pb-security-audit",
             "pb-test-writer",
             "pb-perf-test",
+            "pb-doc",
         }
         # Confirm no duplicate standalone code-review folder remains and all skills use pb-*
         skill_dirs = {p.parent.name for p in (REPO_ROOT / ".agents" / "skills").glob("*/SKILL.md")}
@@ -695,6 +696,9 @@ class TestSpec001Upgrades(unittest.TestCase):
         # Verify rules, skills, commands, and templates no longer hardcode HTA as approver
         files_to_check = [
             REPO_ROOT / ".agents" / "rules" / "standards.md",
+            REPO_ROOT / ".agents" / "rules" / "documentation.md",
+            REPO_ROOT / ".claude" / "rules" / "documentation.md",
+            REPO_ROOT / "docs" / "standards" / "documentation-standard.md",
             REPO_ROOT / "templates" / "spec-template.md",
             REPO_ROOT / "templates" / "implementation-plan.md",
             *sorted((REPO_ROOT / ".agents" / "skills").glob("*/SKILL.md")),
@@ -704,6 +708,149 @@ class TestSpec001Upgrades(unittest.TestCase):
         for path in files_to_check:
             content = path.read_text(encoding="utf-8")
             self.assertNotIn("HTA", content, f"Hardcoded HTA approver found in {path}")
+
+    def test_req_doc_01_standard_rules_and_manifest_resolution(self) -> None:
+        """[REQ-DOC-01..06] Documentation Standard & data-classification resolve via trellis_get_standard and thin rules stay within budget."""
+        from trellis_mcp.tools import tool_trellis_get_standard
+
+        doc_std = tool_trellis_get_standard({"name": "documentation-standard"}, workspace_root=REPO_ROOT)
+        self.assertFalse(doc_std.get("isError"), doc_std)
+        doc_text = doc_std["content"][0]["text"]
+        for marker in ("[REQ-DOC-01]", "[REQ-DOC-06]", "Diátaxis", "29148:2018", "1016-2009", "OpenAPI", "AsyncAPI"):
+            self.assertIn(marker, doc_text)
+
+        dc_std = tool_trellis_get_standard({"name": "data-classification"}, workspace_root=REPO_ROOT)
+        self.assertFalse(dc_std.get("isError"), dc_std)
+        self.assertIn("Data Classification Standard", dc_std["content"][0]["text"])
+
+        agents_rule = REPO_ROOT / ".agents" / "rules" / "documentation.md"
+        claude_rule = REPO_ROOT / ".claude" / "rules" / "documentation.md"
+        self.assertTrue(agents_rule.is_file())
+        self.assertTrue(claude_rule.is_file())
+        agents_text = agents_rule.read_text(encoding="utf-8")
+        self.assertTrue(agents_text.startswith("---\n"))
+        self.assertIn("trigger: always_on", agents_text[:300])
+        self.assertLess(len(agents_text.splitlines()), 60)
+        self.assertLess(len(claude_rule.read_text(encoding="utf-8").splitlines()), 60)
+
+    def test_req_trl_10_rca_similar_prior_and_expanded_corpus_clearance(self) -> None:
+        """[REQ-TRL-10] trellis_rca renders Similar Prior RCAs without KeyError and knowledge indexes root docs with classification headers."""
+        from trellis_mcp.knowledge import tool_trellis_search_knowledge
+        from trellis_mcp.tools import tool_trellis_rca
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            (ws / "docs" / "knowledge").mkdir(parents=True)
+            (ws / "docs" / "standards").mkdir(parents=True)
+            (ws / "docs" / "knowledge" / "rca-deadlock-ledger.md").write_text(
+                "# RCA: Ledger Transfer Deadlock\n\n"
+                "**Classification:** Internal\n\n"
+                "RCA symptom: PostgreSQL transfer deadlock on ledger_entries during concurrent debit lock acquisition.\n",
+                encoding="utf-8",
+            )
+            (ws / "README.md").write_text(
+                "# Demo Banking Portal\n\n"
+                "This README explains bootstrap setup for the banking portal and local verification commands.\n",
+                encoding="utf-8",
+            )
+            (ws / "docs" / "standards" / "secret-runbook.md").write_text(
+                "# Restricted Runbook\n\n"
+                "**Classification:** Confidential\n\n"
+                "Internal escalation details for payment switch failover verification procedures.\n",
+                encoding="utf-8",
+            )
+
+            rca_res = tool_trellis_rca(
+                {
+                    "symptom": "PostgreSQL transfer deadlock on ledger_entries during concurrent debit lock",
+                    "evidence": "ERROR: deadlock detected on relation ledger_entries",
+                },
+                workspace_root=ws,
+            )
+            self.assertFalse(rca_res.get("isError"))
+            rca_text = rca_res["content"][0]["text"]
+            self.assertIn("## 5. Similar Prior RCAs", rca_text)
+            self.assertIn("rca-deadlock-ledger.md", rca_text)
+            self.assertIn("cosine=", rca_text)
+
+            # Root README.md is indexed and searchable at Public clearance
+            pub_search = tool_trellis_search_knowledge(
+                {"query": "bootstrap setup banking portal", "caller_clearance": "Public", "top_k": 5},
+                workspace_root=ws,
+            )
+            self.assertIn("README.md", pub_search["content"][0]["text"])
+            # Confidential doc is filtered out for Internal callers, visible to Confidential callers
+            int_search = tool_trellis_search_knowledge(
+                {"query": "payment switch failover verification", "caller_clearance": "Internal", "top_k": 5},
+                workspace_root=ws,
+            )
+            self.assertNotIn("secret-runbook.md", int_search["content"][0]["text"])
+            conf_search = tool_trellis_search_knowledge(
+                {"query": "payment switch failover verification", "caller_clearance": "Confidential", "top_k": 5},
+                workspace_root=ws,
+            )
+            self.assertIn("secret-runbook.md", conf_search["content"][0]["text"])
+
+    def test_req_doc_05_doctor_anchors_gemini_budget_and_spec_alignment(self) -> None:
+        """[REQ-DOC-05] trellis_doctor validates GEMINI.md budget, root docs, and #heading anchors; trellis_spec matches spec-template.md."""
+        from trellis_mcp.tools import tool_trellis_doctor, tool_trellis_spec
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            (ws / "docs").mkdir()
+            (ws / "docs" / "guide.md").write_text(
+                "# Guide Title\n\n## API & Contract Setup\n\n```markdown\n## Fake Code Heading\n```\n",
+                encoding="utf-8",
+            )
+            (ws / "GEMINI.md").write_text(
+                "# GEMINI\n\n"
+                "[Valid](./docs/guide.md#api--contract-setup)\n"
+                "[Broken Anchor](./docs/guide.md#nonexistent-section)\n"
+                "[Code Block Heading](./docs/guide.md#fake-code-heading)\n"
+                + ("line\n" * 205),
+                encoding="utf-8",
+            )
+            (ws / "CONTRIBUTING.md").write_text("[Bad Root Link](./MISSING.md)\n", encoding="utf-8")
+
+            report = tool_trellis_doctor({"workspace_path": str(ws), "auto_fix": False})
+            text = report["content"][0]["text"]
+            self.assertIn("`GEMINI.md`", text)
+            self.assertIn("exceeds <200 line budget", text)
+            self.assertIn("Broken anchor link", text)
+            self.assertIn("nonexistent-section", text)
+            self.assertIn("fake-code-heading", text)
+            self.assertNotIn("api--contract-setup", text)
+            self.assertIn("CONTRIBUTING.md", text)
+
+            remote = tool_trellis_doctor(
+                {"files": {"GEMINI.md": "line\n" * 201}},
+            )
+            self.assertIn("exceeds <200 line budget", remote["content"][0]["text"])
+
+        spec_res = tool_trellis_spec(
+            {
+                "spec_id": "SPEC-101",
+                "title": "Aligned Spec Structure",
+                "problem": "Ensure generated specs align with templates/spec-template.md.",
+                "task_class": "L",
+                "requirements": ["Align Part A and Part B headings"],
+            },
+            workspace_root=REPO_ROOT,
+        )
+        spec_text = spec_res["content"][0]["text"]
+        for heading in (
+            "### 1. Problem, Goal & Non-Goals",
+            "### 2. Numbered Requirements & Testable Acceptance Criteria",
+            "### 3. Security, Privacy & AI-Boundary Check",
+            "### 4. Traceability & Test Plan",
+            "### 5. Context & Architecture Background",
+            "### 6. Edge Cases, Concurrency & Failure Modes",
+            "### 7. Performance SLA & Complexity Constraints",
+            "### 8. Design Notes & Alternatives Considered",
+            "### 9. Rollout, Migration & Rollback Plan",
+            "### 10. Open Questions & Human Sign-Off",
+        ):
+            self.assertIn(heading, spec_text)
 
 
 if __name__ == "__main__":

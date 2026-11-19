@@ -9,11 +9,11 @@
 
 ## 1. Purpose
 
-`ai-dev-playbook` (**Trellis**) is a version-controlled engineering playbook, cross-IDE skill bundle (17 unified `/pb-*` skills), and zero-dependency **Model Context Protocol (MCP)** control plane (`trellis-mcp`) for agentic and multi-AI software engineering:
+`ai-dev-playbook` (**Trellis**) is a version-controlled engineering playbook, cross-IDE skill bundle (18 unified `/pb-*` skills), and zero-dependency **Model Context Protocol (MCP)** control plane (`trellis-mcp`) for agentic and multi-AI software engineering:
 
 1. **Consistency:** Every project—and every **Software Engineer**—follows the same quality bar when building with **AI agents, foundation models, RAG pipelines, subagents, and MCP tools**.
 2. **Skill Growth:** Working with AI agents makes engineers and architects stronger (critical review of architectural/implementation plans, failing tests first, turning mistakes into explicit rules), not weaker.
-3. **Single Source of Truth Across IDEs & MCP:** Teams share one canonical set of standards (`docs/standards/`) and **17 unified `/pb-*` Agent Skills** (`.agents/skills/pb-*/SKILL.md`, synced to `.claude/skills/` & `.claude/commands/`, and served directly via MCP `prompts/list` & `prompts/get`).
+3. **Single Source of Truth Across IDEs & MCP:** Teams share one canonical set of standards (`docs/standards/`) and **18 unified `/pb-*` Agent Skills** (`.agents/skills/pb-*/SKILL.md`, synced to `.claude/skills/` & `.claude/commands/`, and served directly via MCP `prompts/list` & `prompts/get`).
 4. **Structured Lifecycle & Multi-AI Governance:** Every significant change follows `Plan -> Implement -> Verify -> Review` backed by Tier 2 human approval gates, loop halts, cross-model reviewer separation, data-classification routing (`Public` / `Internal` / `Confidential` / `Restricted`), and redacted JSONL audit logs.
 5. **Centralized or Loopback Hosting (Zero Git Clone):** Run `trellis-mcp` safely on localhost (`127.0.0.1` default with `Origin` allowlist & `429` auth lockout) or host centrally on a team VM with HTTPS/TLS, signed `.pyz` deploys, Admin Dashboard (`HttpOnly` cookie + CSRF), and per-key tool `scopes`.
 
@@ -37,7 +37,7 @@ trellis/
 ├── trellis_mcp/                     # Zero-dependency Python MCP Control Plane & Installer
 │   ├── __init__.py                  # Package version (0.1.0)
 │   ├── __main__.py                  # CLI (--serve-http, --emit-config, --sync-cache, --usage-report, --scopes, --rotate-key, etc.)
-│   ├── server.py                    # JSON-RPC 2.0 MCP server (18 tools, 17 /pb-* prompts, protocolVersion negotiation)
+│   ├── server.py                    # JSON-RPC 2.0 MCP server (18 tools, 18 /pb-* prompts, protocolVersion negotiation)
 │   ├── http_server.py               # Multi-threaded HTTP MCP/A2A server, hashed key store, Origin check, lockout, sessions
 │   ├── ui.py                        # Admin Dashboard SPA HTML/CSS/JS (dark/light themes, filters, pagination, key modals)
 │   ├── branding.py                  # Embedded Trellis favicon asset for the Admin Dashboard
@@ -55,12 +55,12 @@ trellis/
 │   ├── mcp_config.json              # Workspace MCP configuration for Antigravity IDE
 │   ├── skills.json                  # Skills manifest pointing to .agents/skills
 │   ├── rules/                       # Modular rules with YAML trigger frontmatter
-│   └── skills/                      # 17 canonical /pb-* skills (SKILL.md) synced across platforms & MCP prompts
+│   └── skills/                      # 18 canonical /pb-* skills (SKILL.md) synced across platforms & MCP prompts
 ├── .claude/                         # Claude Code configuration
 │   ├── settings.json                # Hardened deny baseline (.trellis_keys.json, ~/.ssh, exfil) + wired PreToolUse/Stop hooks
 │   ├── rules/                       # Modular rules pointing to docs/standards/
-│   ├── commands/                    # 17 mirrored /pb-* slash commands for Claude Code CLI
-│   ├── skills/                      # 17 mirrored SKILL.md bundles (synced via --sync-workspace)
+│   ├── commands/                    # 18 mirrored /pb-* slash commands for Claude Code CLI
+│   ├── skills/                      # 18 mirrored SKILL.md bundles (synced via --sync-workspace)
 │   ├── agents/                      # Read-only code-reviewer & security-auditor, plus test-writer
 │   └── hooks/                       # validate-bash.sh, secret-scan.sh, run-tests.sh
 ├── docs/
@@ -76,6 +76,7 @@ trellis/
 │   │   ├── security-baseline.md
 │   │   ├── git-convention.md
 │   │   ├── data-classification.md
+│   │   ├── documentation-standard.md
 │   │   ├── approved-mcp-servers.json
 │   │   ├── ai-bom.json              # Commercial & open-weight model catalog + excluded license classes
 │   │   └── standards.json           # Versioned standards manifest & provenance hashes
@@ -116,13 +117,13 @@ trellis/
 | `trellis_pipeline` | `[REQ-TRL-12]` | Enforces stage transitions (`discover` -> `done`), Tier 2 human approval gates, 3-strike loop halts, and cross-model reviewer separation. |
 | `trellis_synthesize` | `[REQ-TRL-13]` | Compares multi-AI responses into explicit **Agreements** and **Divergences** without silent majority voting. |
 
-### 3.2 Unified Slash Skills & MCP Prompts (`17` canonical `/pb-*` skills)
+### 3.2 Unified Slash Skills & MCP Prompts (`18` canonical `/pb-*` skills)
 Every workflow playbook is stored canonically in `.agents/skills/pb-*/SKILL.md`, automatically mirrored to `.claude/skills/` and `.claude/commands/pb-*.md` (`--sync-workspace`), **and exposed directly through the MCP server (`prompts/list` & `prompts/get`)**:
 - **Core Lifecycle:** `/pb-plan`, `/pb-spec`, `/pb-pipeline`, `/pb-rca`, `/pb-enhance`, `/pb-handoff`, `/pb-review` (unified Pre-PR & Code Review), `/pb-release-check`
 - **Multi-AI & Knowledge:** `/pb-route`, `/pb-synthesize`, `/pb-knowledge`
-- **Engineering, Git & Governance:** `/pb-git-convention`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-test-writer`, `/pb-security-audit`, `/pb-perf-test`
+- **Engineering, Git, Docs & Governance:** `/pb-git-convention`, `/pb-doc`, `/pb-data-classification`, `/pb-mcp-audit`, `/pb-test-writer`, `/pb-security-audit`, `/pb-perf-test`
 
-### 3.4 How to Use Trellis (Task-to-Tool Quick Guide)
+### 3.3 How to Use Trellis (Task-to-Tool Quick Guide)
 See the full workflow & JSON/CLI examples in **[How to Use Trellis (`docs/how-to-use.md`)](./docs/how-to-use.md)**:
 
 | Goal | Use Slash Skill / IDE Mode | Calls MCP Tool(s) |
@@ -132,9 +133,9 @@ See the full workflow & JSON/CLI examples in **[How to Use Trellis (`docs/how-to
 | **Debug Bugs & Slow Endpoints** | `/pb-rca`, `/pb-enhance`, `/pb-perf-test` | `trellis_rca`, `trellis_enhance` |
 | **Write `[REQ-NNN-XX]` Tests First** | `/pb-test-writer` | `trellis_test` |
 | **Check PII, Secrets & Supply Chain** | `/pb-data-classification`, `/pb-security-audit`, `/pb-mcp-audit` | `trellis_classify`, `trellis_scan`, `trellis_mcp_registry`, `trellis_verify`, `trellis_analytics` |
-| **Commit, Review & Handoff** | `/pb-git-convention`, `/pb-review`, `/pb-release-check`, `/pb-handoff` | `trellis_review`, `trellis_doctor`, `trellis_handoff` |
+| **Audit / Scaffold Docs, Commit, Review & Handoff** | `/pb-doc`, `/pb-git-convention`, `/pb-review`, `/pb-release-check`, `/pb-handoff` | `trellis_get_standard`, `trellis_review`, `trellis_doctor`, `trellis_handoff` |
 
-### 3.3 HTTP Security, Protocol, Discovery & Admin Dashboard (`[REQ-TRL-01..06]`, `[REQ-TRL-12]`, `[REQ-P3-02..07]`)
+### 3.4 HTTP Security, Protocol, Discovery & Admin Dashboard (`[REQ-TRL-01..06]`, `[REQ-TRL-12]`, `[REQ-P3-02..07]`)
 - **Safe Loopback Binding & Origin Check:** `--serve-http` defaults to `127.0.0.1` (`--host 0.0.0.0` explicit for VMs). Disallowed `Origin` headers on `/mcp` or `/admin/*` return `403 Forbidden` (configurable via `--allowed-origin` / `TRELLIS_ALLOWED_ORIGINS`).
 - **Brute-Force Lockout, Hashed Keys & Scoped Access:** Repeated `401` failures trigger temporary `429 Too Many Requests` lockouts per IP. Keys are stored as salted SHA-256 hashes (`.trellis_keys.json`), support optional `--expires-days`, atomic `--rotate-key`, and `--scopes` (or `scopes` JSON array in `POST /admin/keys`) to restrict callable MCP tools (`403 Forbidden`).
 - **Redacted JSONL Audit Trail:** Every HTTP/MCP call writes a structured event to `.trellis-audit.jsonl` (`--audit-log` / `TRELLIS_AUDIT_LOG`) with bearer auth tokens and Luhn PANs redacted and request bodies hashed via SHA-256.
@@ -223,7 +224,7 @@ See the full [Deployment & Release Progress Guide (`docs/deployment-guide.md`)](
 
 ## 6. Verification & Automated Tests
 
-Run the full requirement-linked test suite (`42` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..15]`):
+Run the full requirement-linked test suite (`47` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..16]`, `[REQ-DOC-01..06]`):
 ```bash
 python -m unittest discover -s tests -v
 python -m trellis_mcp --sync-workspace

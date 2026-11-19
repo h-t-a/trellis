@@ -35,7 +35,7 @@ _INJECTION_PATTERNS = [
     re.compile(r"</?untrusted_context[^>]*>", re.IGNORECASE),
 ]
 
-_INDEX_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_INDEX_CACHE: dict[str, tuple[tuple[int, float], list[dict[str, Any]]]] = {}
 
 
 def make_ollama_embedder(
@@ -89,23 +89,46 @@ def _estimate_kappa(mean_resultant_length: float, dim: int) -> float:
     return round(r * (d - r * r) / denom, 3)
 
 
+def _detect_doc_access_level(rel: str, raw: str) -> str:
+    """Resolve clearance level from explicit `**Classification:**` metadata or path defaults."""
+    header = raw[:1200]
+    match = re.search(
+        r"\*\*Classification:\*\*\s*`?(Public|Internal|Confidential|Restricted)`?",
+        header,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).title()
+    if any(seg in rel for seg in ("decisions/", "specs/", "knowledge/", "deployment-guide")):
+        return "Internal"
+    return "Public"
+
+
 def _collect_corpus_chunks(workspace_root: Path | None) -> list[dict[str, Any]]:
     root = workspace_root.resolve() if workspace_root and (workspace_root / "docs").exists() else PACKAGE_ROOT
     cache_key = str(root)
     rel_globs = [
+        "README.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "SECURITY.md",
         "docs/standards/*.md",
         "docs/decisions/*.md",
         "docs/specs/*.md",
         "docs/knowledge/*.md",
+        "docs/integrations/*.md",
+        "templates/*.md",
         "docs/deployment-guide.md",
+        "docs/how-to-use.md",
         "docs/onboarding.md",
     ]
     files: list[Path] = []
     for pat in rel_globs:
         files.extend(sorted(root.glob(pat)))
     latest_mtime = max((f.stat().st_mtime for f in files if f.is_file()), default=0.0)
+    cache_sig = (len(files), latest_mtime)
     cached = _INDEX_CACHE.get(cache_key)
-    if cached and cached[0] == latest_mtime:
+    if cached and cached[0] == cache_sig:
         return cached[1]
 
     chunks: list[dict[str, Any]] = []
@@ -113,9 +136,9 @@ def _collect_corpus_chunks(workspace_root: Path | None) -> list[dict[str, Any]]:
         if not fpath.is_file():
             continue
         rel = fpath.relative_to(root).as_posix()
-        access = "Internal" if "decisions" in rel or "specs" in rel else "Public"
         is_rca = "rca" in rel.lower()
         raw = fpath.read_text(encoding="utf-8", errors="ignore")
+        access = _detect_doc_access_level(rel, raw)
         paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if len(p.strip()) >= 40]
         for idx, para in enumerate(paragraphs[:40]):
             chunks.append(
@@ -129,7 +152,7 @@ def _collect_corpus_chunks(workspace_root: Path | None) -> list[dict[str, Any]]:
                     "text": para[:900],
                 }
             )
-    _INDEX_CACHE[cache_key] = (latest_mtime, chunks)
+    _INDEX_CACHE[cache_key] = (cache_sig, chunks)
     return chunks
 
 
