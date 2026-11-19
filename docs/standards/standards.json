@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-12",
+  "updated": "2026-11-19",
   "standards": {
     "testing-standard": {
       "version": "0.1",
@@ -63,6 +63,20 @@
       "path": "docs/standards/complexity-and-performance.md",
       "versions": {
         "0.1": "docs/standards/complexity-and-performance.md"
+      }
+    },
+    "data-classification": {
+      "version": "0.1",
+      "path": "docs/standards/data-classification.md",
+      "versions": {
+        "0.1": "docs/standards/data-classification.md"
+      }
+    },
+    "documentation-standard": {
+      "version": "0.1",
+      "path": "docs/standards/documentation-standard.md",
+      "versions": {
+        "0.1": "docs/standards/documentation-standard.md"
       }
     },
     "spec-template": {

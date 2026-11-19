@@ -18,6 +18,8 @@ Do not duplicate engineering policies into tool-specific files (see [ADR 0001](.
 - **Fast Root-Cause Analysis (RCA):** [docs/standards/rca-playbook.md](../../docs/standards/rca-playbook.md)
 - **Quota & Token Cost Efficiency:** [docs/standards/quota-efficiency.md](../../docs/standards/quota-efficiency.md)
 - **Complexity & Performance:** [docs/standards/complexity-and-performance.md](../../docs/standards/complexity-and-performance.md)
+- **Data Classification:** [docs/standards/data-classification.md](../../docs/standards/data-classification.md)
+- **Documentation Standard:** [docs/standards/documentation-standard.md](../../docs/standards/documentation-standard.md)
 
 ## 2. Core Operating Rules
 
