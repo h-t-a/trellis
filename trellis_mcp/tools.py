@@ -34,6 +34,8 @@ STANDARD_FILE_MAP: dict[str, str] = {
     "rca-playbook": "docs/standards/rca-playbook.md",
     "quota-efficiency": "docs/standards/quota-efficiency.md",
     "complexity-and-performance": "docs/standards/complexity-and-performance.md",
+    "data-classification": "docs/standards/data-classification.md",
+    "documentation-standard": "docs/standards/documentation-standard.md",
     "spec-template": "templates/spec-template.md",
     "implementation-plan": "templates/implementation-plan.md",
     "walkthrough": "templates/walkthrough.md",
@@ -647,7 +649,7 @@ def tool_trellis_rca(
         prior = find_similar_rcas(symptom, workspace_root=workspace_root, top_k=3)
         if prior:
             bullets = "\n".join(
-                f"- `{item['id']}` (similarity={item['similarity']}): {item['summary']}"
+                f"- `{item['id']}` (cosine={item['cosine']}): {item['excerpt']}"
                 for item in prior
             )
             similar_section = f"\n## 5. Similar Prior RCAs (`[REQ-TRL-10]`)\n{bullets}\n"
@@ -777,50 +779,53 @@ def tool_trellis_spec(
 
 ## Part A: Core Micro-Spec (Mandatory for Class M and Class L)
 
-### 1. Problem & Goal
-{problem}
-
-### 2. Non-Goals (Out of Scope)
+### 1. Problem, Goal & Non-Goals
+- **Problem Statement:** {problem}
+- **Non-Goals (Out of Scope):**
 {non_goal_bullets}
 
-### 3. Requirements & Acceptance Criteria (`[REQ-{spec_num}-XX]`)
+### 2. Numbered Requirements & Testable Acceptance Criteria (`[REQ-{spec_num}-XX]`)
 | Req ID | Requirement | Acceptance Criteria (`Given / When / Then`) |
 | :--- | :--- | :--- |
 {req_table}
 
-### 4. File Touch List & Test Plan
+### 3. Security, Privacy & AI-Boundary Check
+- [ ] **No Tier 3 Violations:** No production secrets, unredacted customer PII/PAN data, production DB mutations, or financial/ledger sign-off delegated to AI.
+- **Tier 2 Human Review Areas Touched:** `[Auth / Input Validation / DB Schema / API Contract / CI-CD / None]`
+
+### 4. Traceability & Test Plan
 | File Path | Action (`Create` / `Modify`) | Linked `[REQ-ID]` | Planned Test Case |
 | :--- | :--- | :--- | :--- |
 {file_rows}
 """
 
     if task_class == "L":
-        spec_md += """
+        spec_md += f"""
 ---
 
 ## Part B: Extended Sections (Mandatory for Class L Only)
 
-### 5. Data Model & Schema Impact
-- **Migrations:** Document forward-only migration script and index impact.
-- **Backward Compatibility:** Confirm zero-downtime dual-read/write compatibility.
+### 5. Context & Architecture Background
+- **System Dependencies & ADRs:** Document upstream/downstream boundaries, data model/schema impact, and linked ADRs.
 
-### 6. API Contract Changes
-- **Endpoints / Schemas:** Document request/response payloads, status codes, and idempotency keys.
+### 6. Edge Cases, Concurrency & Failure Modes
+- **Idempotency & Retries:** Document duplicate request handling (`X-Idempotency-Key`), API contract errors, and timeout behavior.
+- **Concurrency & Locking:** Specify transaction isolation level, lock ordering, and boundary inputs.
 
-### 7. Performance & Complexity Targets
+### 7. Performance SLA & Complexity Constraints
 - **Target Throughput & Latency:** p95 < 500ms, p99 < 1500ms, error rate < 0.1%.
 - **Algorithmic & I/O Bounds:** Time `O(N)`, Space `O(N)`, DB Queries `O(1)` batched.
 
-### 8. Security & AI Boundary Review (Tier 2 / Tier 3)
-- [ ] Input validation & schema enforcement
-- [ ] AuthN / AuthZ object-level permission check
-- [ ] Audit logging with zero PII/secret leakage
+### 8. Design Notes & Alternatives Considered
+- **Chosen Approach & Security Review:** Document input validation, AuthN/AuthZ object-level checks, audit logging with zero PII/secret leakage, and rejected alternatives.
 
-### 9. Rollout, Observability & Rollback Plan
-- **Feature Flag / Canary:** Gradual rollout with automated rollback trigger on p99 or 5xx spike.
+### 9. Rollout, Migration & Rollback Plan
+- **Database / Config Migrations:** Document backward-compatible forward migrations and dual-read/write safety.
+- **Feature Flag / Canary & Rollback:** Gradual rollout with automated rollback trigger on p99 or 5xx spike.
 
-### 10. Open Questions
+### 10. Open Questions & Human Sign-Off
 - [ ] Confirm cross-service SLA and downstream rate limits before execution.
+- [ ] Approved by `{approver.name}` (`{approver.source}`) on `[YYYY-MM-DD]`
 """
 
     return _ok(spec_md)
@@ -986,6 +991,53 @@ def tool_trellis_review(
     )
 
 
+def _strip_fenced_code_blocks(md_text: str) -> str:
+    """Remove fenced code blocks (``` or ~~~) while preserving line structure for link/heading checks."""
+    kept: list[str] = []
+    in_fence = False
+    fence_char = ""
+    for line in md_text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_char = marker[0]
+            elif marker[0] == fence_char:
+                in_fence = False
+                fence_char = ""
+            continue
+        if not in_fence:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _slugify_heading(heading_text: str) -> str:
+    """Generate a GitHub Flavored Markdown heading anchor slug."""
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", heading_text)
+    cleaned = re.sub(r"[`*_~]", "", cleaned).strip().lower()
+    cleaned = re.sub(r"[^\w\s-]", "", cleaned)
+    return cleaned.replace(" ", "-")
+
+
+def _extract_markdown_anchors(md_text: str) -> set[str]:
+    """Collect GFM heading slugs outside fenced code blocks."""
+    anchors: set[str] = set()
+    counts: dict[str, int] = {}
+    for line in _strip_fenced_code_blocks(md_text).splitlines():
+        match = re.match(r"^\s*#{1,6}\s+(.+?)(?:\s+#+\s*)?$", line)
+        if not match:
+            continue
+        base = _slugify_heading(match.group(1))
+        if not base:
+            continue
+        seen = counts.get(base, 0)
+        slug = base if seen == 0 else f"{base}-{seen}"
+        counts[base] = seen + 1
+        anchors.add(slug)
+    return anchors
+
+
 def tool_trellis_doctor(
     args: dict[str, Any], workspace_root: Path | None = None
 ) -> dict[str, Any]:
@@ -1026,7 +1078,7 @@ def tool_trellis_doctor(
                 )
             if norm.endswith("SKILL.md") and len(content.splitlines()) >= 80:
                 findings.append(f"Skill `{norm}` exceeds <80 line budget")
-            if norm.endswith("CLAUDE.md") and len(content.splitlines()) >= 200:
+            if norm.endswith(("CLAUDE.md", "GEMINI.md")) and len(content.splitlines()) >= 200:
                 findings.append(f"`{norm}` exceeds <200 line budget")
 
         status = "HEALTHY" if not findings or (auto_fix and fixes_applied) else "ISSUES_FOUND"
@@ -1103,12 +1155,13 @@ def tool_trellis_doctor(
                     f"Skill `{skill_md.parent.name}/SKILL.md` is {len(lines)} lines (exceeds <80 line budget)"
                 )
 
-    # 4. Check CLAUDE.md line budget (<200 lines)
-    claude_md = root / "CLAUDE.md"
-    if claude_md.exists():
-        c_lines = claude_md.read_text(encoding="utf-8").splitlines()
-        if len(c_lines) >= 200:
-            findings.append(f"`CLAUDE.md` is {len(c_lines)} lines (exceeds <200 line budget)")
+    # 4. Check CLAUDE.md and GEMINI.md line budgets (<200 lines)
+    for ctx_name in ("CLAUDE.md", "GEMINI.md"):
+        ctx_md = root / ctx_name
+        if ctx_md.exists():
+            c_lines = ctx_md.read_text(encoding="utf-8").splitlines()
+            if len(c_lines) >= 200:
+                findings.append(f"`{ctx_name}` is {len(c_lines)} lines (exceeds <200 line budget)")
 
     # 5. Validate JSON configuration files
     for rel in (".mcp.json", ".agents/mcp_config.json", ".agents/skills.json", ".claude/settings.json"):
@@ -1129,12 +1182,24 @@ def tool_trellis_doctor(
                     f"Skill `{name}` is not mirrored to `.claude/skills/{name}/SKILL.md`"
                 )
 
-    # 7. Detect broken relative Markdown links
+    # 7. Detect broken relative Markdown links and local #heading anchors
     link_re = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
     md_files: list[Path] = []
-    for pattern in ("README.md", "CLAUDE.md", "docs/**/*.md", "templates/*.md", ".agents/**/*.md", ".claude/**/*.md"):
+    for pattern in (
+        "README.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "SECURITY.md",
+        "docs/**/*.md",
+        "templates/*.md",
+        ".agents/**/*.md",
+        ".claude/**/*.md",
+    ):
         md_files.extend(root.glob(pattern))
     checked_links: set[str] = set()
+    anchor_cache: dict[Path, set[str]] = {}
     for md_path in sorted(set(md_files)):
         if not md_path.is_file():
             continue
@@ -1142,21 +1207,41 @@ def tool_trellis_doctor(
             md_text = md_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for raw_target in link_re.findall(md_text):
-            target = raw_target.split("#", 1)[0].strip()
-            if not target or target.startswith(("http://", "https://", "mailto:", "#", "@", "<")):
+        scan_text = _strip_fenced_code_blocks(md_text)
+        rel_src = md_path.relative_to(root).as_posix()
+        for raw_target in link_re.findall(scan_text):
+            raw_clean = raw_target.strip()
+            if not raw_clean or raw_clean.startswith(("http://", "https://", "mailto:", "@", "<")):
                 continue
-            if "{" in target or "}" in target:
+            if "{" in raw_clean or "}" in raw_clean:
                 continue
-            resolved = (md_path.parent / target).resolve()
-            key = f"{md_path.as_posix()}::{target}"
+            if "#" in raw_clean:
+                target, anchor = raw_clean.split("#", 1)
+                target = target.strip()
+                anchor = anchor.strip()
+            else:
+                target, anchor = raw_clean, ""
+            key = f"{md_path.as_posix()}::{raw_clean}"
             if key in checked_links:
                 continue
             checked_links.add(key)
-            if not resolved.exists():
-                findings.append(
-                    f"Broken relative link in `{md_path.relative_to(root).as_posix()}` -> `{target}`"
-                )
+            if not target:
+                resolved = md_path.resolve()
+            else:
+                resolved = (md_path.parent / target).resolve()
+                if not resolved.exists():
+                    findings.append(f"Broken relative link in `{rel_src}` -> `{target}`")
+                    continue
+            if anchor and resolved.is_file() and resolved.suffix.lower() == ".md":
+                if resolved not in anchor_cache:
+                    try:
+                        anchor_cache[resolved] = _extract_markdown_anchors(
+                            resolved.read_text(encoding="utf-8")
+                        )
+                    except (OSError, UnicodeDecodeError):
+                        anchor_cache[resolved] = set()
+                if anchor.lower() not in anchor_cache[resolved]:
+                    findings.append(f"Broken anchor link in `{rel_src}` -> `{raw_clean}`")
 
     # 8. Informational DRAFT/TODO markers (never affects status)
     marker_lines: list[str] = []
