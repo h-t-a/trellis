@@ -337,6 +337,386 @@ class TestSpec002SecurityHardening(unittest.TestCase):
             with mock.patch.object(Path, "is_symlink", return_value=True):
                 self.assertFalse(_is_within_root(ws, inside_file))
 
+    def test_req_trl_20_deploy_disabled_by_default_and_requires_separate_key(self) -> None:
+        """[REQ-TRL-20] /admin/deploy is disabled by default, requires a distinct deploy key, enforces version monotonicity, and swaps atomically."""
+        import hashlib
+        import hmac
+        import io
+        import zipfile
+        from trellis_mcp.http_server import TrellisHTTPServer
+
+        def _make_pyz(version_str: str) -> bytes:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("__main__.py", "from trellis_mcp.__main__ import main\n")
+                zf.writestr("trellis_mcp/__init__.py", f'__version__ = "{version_str}"\n')
+                zf.writestr("trellis_mcp/__main__.py", "def main(): return 0\n")
+            return b"#!/usr/bin/env python3\n" + buf.getvalue()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            ws = tmp_dir / "vm_runtime"
+            ws.mkdir()
+            audit_path = tmp_dir / "audit.jsonl"
+            admin_token = "admin-token-deploy-test"
+            deploy_secret = "separate-ci-deploy-signing-key"
+            pyz_v1 = _make_pyz("0.1.0")
+            pyz_v2 = _make_pyz("0.2.0")
+            pyz_old = _make_pyz("0.0.9")
+
+            # 1. Disabled by default -> 403 even with valid admin token & signature
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=admin_token,
+                workspace_root=ws,
+                keys_file=ws / ".trellis_keys.json",
+            ) as srv_default:
+                sig = hmac.new(admin_token.encode("utf-8"), pyz_v1, hashlib.sha256).hexdigest()
+                req = Request(
+                    f"{srv_default.base_url}/admin/deploy",
+                    data=pyz_v1,
+                    headers={
+                        "Authorization": f"Bearer {admin_token}",
+                        "X-Trellis-Signature": sig,
+                    },
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as ctx:
+                    srv_default.open_request(req)
+                self.assertEqual(ctx.exception.code, 403)
+                ctx.exception.close()
+
+            # 2. Enabled with separate deploy_signing_key
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=admin_token,
+                workspace_root=ws,
+                keys_file=ws / ".trellis_keys.json",
+                enable_remote_deploy=True,
+                deploy_signing_key=deploy_secret,
+                audit_log=audit_path,
+            ) as srv:
+                def _post_deploy(data: bytes, sig_key: str) -> tuple[int, dict]:
+                    sig_hex = hmac.new(sig_key.encode("utf-8"), data, hashlib.sha256).hexdigest()
+                    r = Request(
+                        f"{srv.base_url}/admin/deploy",
+                        data=data,
+                        headers={
+                            "Authorization": f"Bearer {admin_token}",
+                            "X-Trellis-Signature": sig_hex,
+                        },
+                        method="POST",
+                    )
+                    try:
+                        with srv.open_request(r) as resp:
+                            return resp.status, json.loads(resp.read().decode("utf-8"))
+                    except HTTPError as exc:
+                        body = json.loads(exc.read().decode("utf-8"))
+                        code = exc.code
+                        exc.close()
+                        return code, body
+
+                # Admin token alone cannot sign deploy payload
+                code_admin_sig, _ = _post_deploy(pyz_v1, admin_token)
+                self.assertEqual(code_admin_sig, 403)
+
+                # Downgrade below running version rejected (409)
+                code_old, _ = _post_deploy(pyz_old, deploy_secret)
+                self.assertEqual(code_old, 409)
+
+                # Initial v0.1.0 succeeds with separate deploy key
+                code_v1, body_v1 = _post_deploy(pyz_v1, deploy_secret)
+                self.assertEqual(code_v1, 200)
+                expected_sha = hashlib.sha256(pyz_v1).hexdigest()
+                self.assertEqual(body_v1["sha256"], expected_sha)
+                self.assertTrue((ws / "trellis-mcp.pyz").exists())
+
+                # Replaying same version is rejected (409)
+                code_replay, _ = _post_deploy(pyz_v1, deploy_secret)
+                self.assertEqual(code_replay, 409)
+
+                # Higher version v0.2.0 succeeds and saves .pyz.bak rollback backup
+                code_v2, body_v2 = _post_deploy(pyz_v2, deploy_secret)
+                self.assertEqual(code_v2, 200)
+                self.assertEqual(body_v2["deployed_version"], "0.2.0")
+                self.assertTrue((ws / "trellis-mcp.pyz.bak").exists())
+                self.assertEqual((ws / "trellis-mcp.pyz.bak").read_bytes(), pyz_v1)
+                self.assertEqual((ws / "trellis-mcp.pyz").read_bytes(), pyz_v2)
+
+                # Audit log contains deployed artifact SHA-256
+                audit_text = audit_path.read_text(encoding="utf-8")
+                self.assertIn(expected_sha, audit_text)
+
+    def test_req_trl_21_non_loopback_requires_tls_and_host_allowlist(self) -> None:
+        """[REQ-TRL-21] Non-loopback bind requires TLS or --insecure-http; Host allowlist stops DNS rebinding; --public-url controls install URL."""
+        from trellis_mcp.__main__ import main
+        from trellis_mcp.http_server import TrellisHTTPServer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keys_file = Path(tmp) / ".trellis_keys.json"
+            # Non-loopback without TLS or insecure_http raises ValueError
+            with self.assertRaises(ValueError):
+                TrellisHTTPServer(
+                    host="0.0.0.0",
+                    port=0,
+                    api_key="test-key",
+                    workspace_root=REPO_ROOT,
+                    keys_file=keys_file,
+                )
+
+            # CLI refuses non-loopback without TLS / --insecure-http
+            rc = main(
+                [
+                    "--serve-http",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "0",
+                    "--api-key",
+                    "test-key",
+                    "--keys-file",
+                    str(keys_file),
+                ]
+            )
+            self.assertNotEqual(rc, 0)
+
+            # DNS-rebinding & --public-url test
+            admin_key = "test-host-allowlist-key"
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=admin_key,
+                workspace_root=REPO_ROOT,
+                keys_file=keys_file,
+                public_url="https://trellis.example.com",
+            ) as srv:
+                # Attacker-controlled Host + matching Origin must be rejected (403)
+                status, _, _ = srv.dispatch_http(
+                    method="POST",
+                    path="/mcp",
+                    headers={
+                        "Host": "evil-rebind.example",
+                        "Origin": "http://evil-rebind.example",
+                        "Authorization": f"Bearer {admin_key}",
+                        "Content-Type": "application/json",
+                    },
+                    body=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+                )
+                self.assertEqual(status, 403)
+
+                # /install.sh uses configured public_url, ignoring spoofed X-Forwarded-Proto
+                st_sh, _, body_sh = srv.dispatch_http(
+                    method="GET",
+                    path="/install.sh",
+                    headers={
+                        "Host": "127.0.0.1",
+                        "X-Forwarded-Proto": "http",
+                        "Authorization": f"Bearer {admin_key}",
+                    },
+                )
+                self.assertEqual(st_sh, 200)
+                sh_text = body_sh.decode("utf-8")
+                self.assertIn("https://trellis.example.com", sh_text)
+                self.assertNotIn("http://127.0.0.1", sh_text)
+
+    def test_req_trl_22_installer_validates_skill_names_and_preserves_malformed_mcp_json(self) -> None:
+        """[REQ-TRL-22] Remote installer requires signed bundles by default, validates skill names, preserves malformed MCP configs, and avoids literal keys."""
+        import hashlib
+        import hmac
+        from trellis_mcp.http_server import TrellisHTTPServer
+        from trellis_mcp.installer import install_remote, validate_skill_name
+
+        # Skill-name validation regex
+        self.assertTrue(validate_skill_name("pb-review"))
+        self.assertFalse(validate_skill_name("../evil"))
+        self.assertFalse(validate_skill_name("bad/name"))
+        self.assertFalse(validate_skill_name("UPPER"))
+        self.assertFalse(validate_skill_name(".hidden"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            api_key = "test-installer-key"
+            sig_key = "test-bundle-hmac-secret"
+
+            # 1. Unsigned bundle refused by default (allow_unsigned=False)
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=api_key,
+                workspace_root=REPO_ROOT,
+                keys_file=tmp_dir / ".keys1.json",
+            ) as srv_unsigned:
+                with self.assertRaises(ValueError):
+                    install_remote(
+                        server_url=srv_unsigned.base_url,
+                        api_key=api_key,
+                        home_dir=tmp_dir / "home_unsigned",
+                    )
+
+            # 2. Signed bundle installs cleanly without writing literal API key and shows diff summary
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key=api_key,
+                bundle_signing_key=sig_key,
+                workspace_root=REPO_ROOT,
+                keys_file=tmp_dir / ".keys2.json",
+            ) as srv_signed:
+                home_ok = tmp_dir / "home_ok"
+                summary = install_remote(
+                    server_url=srv_signed.base_url,
+                    api_key=api_key,
+                    signing_key=sig_key,
+                    home_dir=home_ok,
+                )
+                self.assertIn("Bundle diff", summary)
+                cfg_path = home_ok / ".gemini" / "config" / "mcp_config.json"
+                cfg_text = cfg_path.read_text(encoding="utf-8")
+                self.assertIn("${TRELLIS_API_KEY}", cfg_text)
+                self.assertNotIn(api_key, cfg_text)
+
+                # 3. Malformed existing mcp_config.json is backed up and aborts without overwriting
+                home_bad = tmp_dir / "home_bad"
+                bad_cfg = home_bad / ".gemini" / "config" / "mcp_config.json"
+                bad_cfg.parent.mkdir(parents=True, exist_ok=True)
+                corrupt_content = '{"mcpServers": {"my-other-server": {"command": "node"}, BROKEN'
+                bad_cfg.write_text(corrupt_content, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    install_remote(
+                        server_url=srv_signed.base_url,
+                        api_key=api_key,
+                        signing_key=sig_key,
+                        home_dir=home_bad,
+                    )
+                # Original corrupt file untouched and backup created
+                self.assertEqual(bad_cfg.read_text(encoding="utf-8"), corrupt_content)
+                backups = list(bad_cfg.parent.glob("mcp_config.json.bak*"))
+                self.assertGreaterEqual(len(backups), 1)
+
+            # 4. Malicious skill name in bundle payload is rejected before writing
+            poisoned_bundle = json.dumps(
+                {
+                    "version": "0.1.0",
+                    "rules_md": "# Rules\n",
+                    "skills": {"../escape": "# Evil\n"},
+                }
+            ).encode("utf-8")
+            poisoned_sig = hmac.new(sig_key.encode("utf-8"), poisoned_bundle, hashlib.sha256).hexdigest()
+
+            class _FakeResp:
+                headers = {"X-Trellis-Bundle-Signature": poisoned_sig}
+                def read(self) -> bytes:
+                    return poisoned_bundle
+                def __enter__(self):
+                    return self
+                def __exit__(self, *a):
+                    return None
+
+            with mock.patch("trellis_mcp.http_server.open_url_resilient", return_value=_FakeResp()):
+                home_poison = tmp_dir / "home_poison"
+                with self.assertRaises(ValueError):
+                    install_remote(
+                        server_url="https://trellis.example.com",
+                        api_key=api_key,
+                        signing_key=sig_key,
+                        home_dir=home_poison,
+                    )
+                self.assertFalse((home_poison / ".claude" / "escape").exists())
+
+    def test_req_trl_23_proxy_ip_trust_eviction_and_no_plaintext_tokens(self) -> None:
+        """[REQ-TRL-23] X-Forwarded-For only honored from trusted proxies; rate/lockout maps evict stale IPs; plaintext tokens cannot auth without migration."""
+        from trellis_mcp.http_server import TrellisHTTPServer, TrellisKeyStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keys_file = Path(tmp) / ".trellis_keys.json"
+
+            # 1. Legacy plaintext token cannot authenticate directly, but migrates cleanly
+            legacy_token = "trl_legacy_plaintext_secret_123456"
+            keys_file.write_text(
+                json.dumps(
+                    {
+                        "keys": [
+                            {
+                                "key_id": "key_legacy01",
+                                "label": "legacy-user",
+                                "role": "member",
+                                "token": legacy_token,
+                                "prefix": "trl_legacy...3456",
+                                "created_at": "2026-11-01T00:00:00Z",
+                                "revoked": False,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = TrellisKeyStore(keys_file)
+            self.assertIsNone(store.authenticate(legacy_token))
+            migrated_count = store.migrate_legacy_plaintext_keys()
+            self.assertEqual(migrated_count, 1)
+            raw_after = keys_file.read_text(encoding="utf-8")
+            self.assertNotIn(legacy_token, raw_after)
+            authed = store.authenticate(legacy_token)
+            self.assertIsNotNone(authed)
+            self.assertEqual(authed[1], "key_legacy01")
+
+            # 2. Proxy IP trust and bounded eviction
+            with TrellisHTTPServer(
+                host="127.0.0.1",
+                port=0,
+                api_key="admin-proxy-test",
+                workspace_root=REPO_ROOT,
+                keys_file=keys_file,
+                trusted_proxies=["127.0.0.1"],
+                auth_failure_limit=2,
+                auth_lockout_sec=30.0,
+                rate_window_sec=1.0,
+                max_tracked_ips=4,
+            ) as srv:
+                # From untrusted peer 198.51.100.9, X-Forwarded-For is ignored
+                self.assertEqual(
+                    srv._resolve_client_ip("198.51.100.9", {"x-forwarded-for": "203.0.113.5"}),
+                    "198.51.100.9",
+                )
+                # From trusted proxy 127.0.0.1, X-Forwarded-For client IP is honored
+                self.assertEqual(
+                    srv._resolve_client_ip("127.0.0.1", {"x-forwarded-for": "203.0.113.5, 127.0.0.1"}),
+                    "203.0.113.5",
+                )
+
+                # Locking out 203.0.113.5 via proxy does NOT lock out 203.0.113.6
+                for _ in range(2):
+                    srv.dispatch_http(
+                        "POST",
+                        "/mcp",
+                        {"Authorization": "Bearer wrong", "X-Forwarded-For": "203.0.113.5"},
+                        b"{}",
+                        client_ip="127.0.0.1",
+                    )
+                st_blocked, _, _ = srv.dispatch_http(
+                    "POST",
+                    "/mcp",
+                    {"Authorization": "Bearer admin-proxy-test", "X-Forwarded-For": "203.0.113.5"},
+                    b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+                    client_ip="127.0.0.1",
+                )
+                st_other, _, _ = srv.dispatch_http(
+                    "POST",
+                    "/mcp",
+                    {"Authorization": "Bearer admin-proxy-test", "X-Forwarded-For": "203.0.113.6"},
+                    b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+                    client_ip="127.0.0.1",
+                )
+                self.assertEqual(st_blocked, 429)
+                self.assertEqual(st_other, 200)
+
+                # Rate-limit map stays bounded under IP spray (max_tracked_ips=4)
+                for idx in range(20):
+                    srv._allow_request(f"198.51.100.{idx}")
+                self.assertLessEqual(len(srv._rate_hits), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

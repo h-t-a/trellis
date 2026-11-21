@@ -345,22 +345,25 @@ class TestTrellisMCPServer(unittest.TestCase):
                 self.assertIn("Class M", rpc_body["result"]["content"][0]["text"])
 
     def test_req_mcp_07_zero_clone_remote_bundle_and_install(self) -> None:
-        """[REQ-MCP-07] Verify zero-clone remote client setup via HTTP server and remote trellis_doctor."""
+        """[REQ-MCP-07] Verify signed zero-clone remote client setup via HTTP server and remote trellis_doctor."""
         test_key = "team-secret-key-remote-install"
+        bundle_sig_key = "team-bundle-signing-secret"
         with TrellisHTTPServer(
             host="127.0.0.1",
             port=0,
             api_key=test_key,
+            bundle_signing_key=bundle_sig_key,
             workspace_root=self.repo_root,
         ) as http_srv:
             base_url = http_srv.base_url
 
-            # Teammate installs from remote VM URL without cloning the repo
+            # Teammate installs from remote VM URL without cloning the repo (signed bundle)
             with tempfile.TemporaryDirectory() as tmp_home:
                 home_path = Path(tmp_home)
                 summary = install_remote(
                     server_url=base_url,
                     api_key=test_key,
+                    signing_key=bundle_sig_key,
                     home_dir=home_path,
                 )
                 self.assertIn(f"{base_url}/mcp", summary)
@@ -529,21 +532,24 @@ class TestTrellisMCPServer(unittest.TestCase):
             self.assertTrue(out["has_text"])
             self.assertGreaterEqual(out["skill_count"], 7)
 
-            # Verify admin-only HTTP hot-deploy endpoint (POST /admin/deploy)
+            # Verify admin-only HTTP hot-deploy endpoint (POST /admin/deploy) with separate deploy key ([REQ-TRL-20])
             target_workspace = tmp_dir / "vm_runtime"
             target_workspace.mkdir(parents=True, exist_ok=True)
+            deploy_secret = "separate-deploy-hmac-key-09"
             with TrellisHTTPServer(
                 host="127.0.0.1",
                 port=0,
                 auto_generate_key=True,
                 keys_file=target_workspace / ".trellis_keys.json",
                 workspace_root=target_workspace,
+                enable_remote_deploy=True,
+                deploy_signing_key=deploy_secret,
             ) as http_srv:
                 base_url = http_srv.base_url
                 admin_key = http_srv.api_key
                 deploy_bytes = pyz_path.read_bytes()
                 deploy_sig = hmac.new(
-                    admin_key.encode("utf-8"), deploy_bytes, hashlib.sha256
+                    deploy_secret.encode("utf-8"), deploy_bytes, hashlib.sha256
                 ).hexdigest()
                 deploy_req = Request(
                     f"{base_url}/admin/deploy",
@@ -658,12 +664,15 @@ class TestTrellisMCPServer(unittest.TestCase):
 
             target_workspace = tmp_dir / "vm_runtime"
             target_workspace.mkdir(parents=True, exist_ok=True)
+            deploy_secret = "separate-deploy-hmac-key-10"
             with TrellisHTTPServer(
                 host="127.0.0.1",
                 port=0,
                 auto_generate_key=True,
                 keys_file=target_workspace / ".trellis_keys.json",
                 workspace_root=target_workspace,
+                enable_remote_deploy=True,
+                deploy_signing_key=deploy_secret,
             ) as srv:
                 admin_key = srv.api_key
 
@@ -688,8 +697,12 @@ class TestTrellisMCPServer(unittest.TestCase):
 
                 self.assertEqual(deploy({}), 400)
                 self.assertEqual(deploy({"X-Trellis-Signature": "deadbeef"}), 403)
-                good_sig = hmac.new(
+                admin_only_sig = hmac.new(
                     admin_key.encode("utf-8"), deploy_bytes, hashlib.sha256
+                ).hexdigest()
+                self.assertEqual(deploy({"X-Trellis-Signature": admin_only_sig}), 403)
+                good_sig = hmac.new(
+                    deploy_secret.encode("utf-8"), deploy_bytes, hashlib.sha256
                 ).hexdigest()
                 self.assertEqual(deploy({"X-Trellis-Signature": good_sig}), 200)
 
