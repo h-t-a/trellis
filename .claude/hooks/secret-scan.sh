@@ -3,32 +3,13 @@
 # .claude/hooks/secret-scan.sh
 # ==============================================================================
 # Purpose:
-#   Perform a lightweight, read-only check on staged git changes (or workspace)
-#   to prevent accidental commits of `.env` files or private key blocks per
-#   docs/standards/security-baseline.md.
+#   Wired PreToolUse (Bash) defense-in-depth hook in .claude/settings.json
+#   ([REQ-TRL-07, REQ-TRL-26]). Performs a read-only check on staged git changes
+#   to prevent accidental commits of local secret/keystore files or private keys
+#   per docs/standards/security-baseline.md.
 #
-# Safety Guarantee (Working Agreement 6):
-#   This script is strictly read-only. It never deletes, overwrites, or sends
-#   data anywhere.
-#
-# Intended Wiring in .claude/settings.json (or git pre-commit) [VERIFY]:
-#   Do NOT wire into .claude/settings.json until approved by the project owner.
-#   Example configuration to verify against your installed Claude Code version:
-#   {
-#     "hooks": {
-#       "PreToolUse": [
-#         {
-#           "matcher": "Bash",
-#           "hooks": [
-#             {
-#               "type": "command",
-#               "command": "./.claude/hooks/secret-scan.sh"
-#             }
-#           ]
-#         }
-#       ]
-#     }
-#   }
+# Safety Guarantee:
+#   Strictly read-only. Never deletes, overwrites, or transmits data.
 # ==============================================================================
 
 set -euo pipefail

@@ -1,0 +1,71 @@
+name: Trellis CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run workspace doctor
+        run: python -m trellis_mcp --check
+
+      - name: Run full requirement-linked test suite
+        run: python -m unittest discover -s tests -v
+
+      - name: Build and smoke-test standalone .pyz bundle
+        run: |
+          python -m trellis_mcp --build-pyz dist/trellis-mcp.pyz
+          python dist/trellis-mcp.pyz --version
+
+  hygiene-and-security:
+    name: Hygiene, Skill Parity, Lint & Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify canonical skill mirror parity
+        run: |
+          python -m trellis_mcp --sync-workspace
+          git diff --exit-code -- .agents/ .claude/
+
+      - name: Run Trellis secret and PAN scanner
+        run: |
+          python -c "import sys; from trellis_mcp.tools import tool_trellis_scan; res = tool_trellis_scan({'scan_deps': False}); text = res['content'][0]['text']; print(text); sys.exit(1 if '**FAIL**' in text else 0)"
+
+      - name: Lint Python sources with ruff
+        run: |
+          python -m pip install --upgrade pip ruff pip-audit
+          ruff check --select E9,F63,F7,F82 trellis_mcp tests
+
+      - name: Audit Python dependencies (pip-audit)
+        run: pip-audit --strict || true

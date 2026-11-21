@@ -1,5 +1,5 @@
 {
-  "_comment": "Claude Code project security baseline ([REQ-TRL-07]). Blocks access to keystores/credentials/exfiltration commands and wires read-only validation hooks.",
+  "_comment": "Claude Code project security baseline ([REQ-TRL-07, REQ-TRL-26]). Pattern-based deny rules and PreToolUse/Stop hooks act as a defense-in-depth safety net; pair with allowlists and OS/container sandboxing for hard isolation.",
   "permissions": {
     "allow": [],
     "deny": [
