@@ -1,7 +1,7 @@
 # AI Boundary Standard: What AI Should and Should Not Do `[DRAFT]`
 
 **Status:** Working draft v0.1 `[DRAFT, decide with team]`  
-**Source:** [trellis-project-export.md](../knowledge/trellis-project-export.md) (Section 6)  
+**Source:** Canonical Trellis engineering standard (`docs/standards/`)  
 **Domain Context:** Enterprise banking and government-style systems.
 
 > [!IMPORTANT]

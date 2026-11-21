@@ -1,14 +1,14 @@
 # Test Plan & Performance SLA Specification: `[Application / Release Name]`
 
-- **Application / Service:** `[e.g., Wallet Application / Web Portal]`
+- **Application / Service:** `[e.g., Primary API Service / Web Portal]`
 - **Author / QA Lead:** `[Name]`
 - **Sign-Off Owner:** `[Named Owner]`
 - **Date:** `[YYYY-MM-DD]`
 - **Canonical Standards:** [docs/standards/testing-standard.md](../docs/standards/testing-standard.md) & [docs/standards/performance-sla.md](../docs/standards/performance-sla.md)
 
 > [!WARNING]
-> **Management Target Clarification (`[VERIFY]`):**
-> Do **not** enter `10,000` (Wallet) or `1,000+` (Web Portal) as confirmed TPS requirements unless Management has explicitly confirmed whether those figures represent **TPS**, **concurrent users**, or **daily transaction volume** (see [docs/standards/performance-sla.md](../docs/standards/performance-sla.md)).
+> **Throughput Unit Clarification (`[VERIFY]`):**
+> Do **not** enter raw stakeholder load numbers as confirmed TPS requirements unless stakeholders have explicitly confirmed whether those figures represent **TPS**, **concurrent users**, or **daily transaction volume** (see [docs/standards/performance-sla.md](../docs/standards/performance-sla.md)).
 
 ---
 

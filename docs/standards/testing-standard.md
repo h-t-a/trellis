@@ -1,7 +1,7 @@
 # Testing Standard
 
 **Status:** Working draft v0.1 `[DRAFT]`  
-**Source:** [trellis-project-export.md](../knowledge/trellis-project-export.md) (Sections 4.2, 4.3, 5)  
+**Source:** Canonical Trellis engineering standard (`docs/standards/`)  
 **Domain Context:** Enterprise banking / government-style systems where testing discipline and auditability are first-class concerns.
 
 ---

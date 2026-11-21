@@ -1,7 +1,7 @@
 # Definition of Done (DoD) `[DRAFT]`
 
 **Status:** Working draft v0.1 `[DRAFT, to research and finalize]`  
-**Source:** [trellis-project-export.md](../knowledge/trellis-project-export.md) (Section 5)
+**Source:** Canonical Trellis engineering standard (`docs/standards/`)
 
 > [!NOTE]
 > Both checklists below are tagged `[DRAFT]` and must be reviewed and finalized with the engineering team during Phase 1 research.

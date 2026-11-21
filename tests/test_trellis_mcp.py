@@ -414,7 +414,7 @@ class TestTrellisMCPServer(unittest.TestCase):
                 # 1. Admin issues a member key for another user/team via POST /admin/keys
                 issue_req = Request(
                     f"{base_url}/admin/keys",
-                    data=json.dumps({"label": "team-ibanking", "role": "member"}).encode("utf-8"),
+                    data=json.dumps({"label": "team-alpha", "role": "member"}).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {admin_key}",
@@ -426,7 +426,7 @@ class TestTrellisMCPServer(unittest.TestCase):
                     issued = json.loads(issue_resp.read().decode("utf-8"))
                     member_key = issued["api_key"]
                     member_key_id = issued["key_id"]
-                    self.assertTrue(member_key.startswith("trl_team_ibanking_"))
+                    self.assertTrue(member_key.startswith("trl_team_alpha_"))
                     self.assertEqual(issued["role"], "member")
                     self.assertIn("/install.sh", issued["install_command"])
 

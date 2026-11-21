@@ -141,16 +141,16 @@ python -m trellis_mcp --serve-http --auto-generate-key --port 8080
 # http://127.0.0.1:8080/admin/dashboard
 
 # Issue a least-privilege scoped member key for a teammate
-python -m trellis_mcp --generate-key team-ibanking --role member --expires-days 90 `
-  --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_scan
+python -m trellis_mcp --generate-key team-alpha --role member --expires-days 90 `
+  --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_review
 
 # List, rotate, or revoke keys without restarting the server
 python -m trellis_mcp --list-keys
-python -m trellis_mcp --rotate-key team-ibanking --expires-days 90
-python -m trellis_mcp --revoke-key team-ibanking
+python -m trellis_mcp --rotate-key team-alpha --expires-days 90
+python -m trellis_mcp --revoke-key team-alpha
 
-# Teammate zero-clone install against a remote VM
-python -m trellis_mcp --install-remote https://<vm-ip>:8443 --api-key "<member-api-key>"
+# Teammate zero-clone install against a remote HTTPS host (signed bundle)
+python -m trellis_mcp --install-remote https://trellis.example.com --api-key "<member-api-key>" --bundle-signing-key "<bundle-signing-key>"
 ```
 
 ### Running Automated Tests & Building Single-File `.pyz`

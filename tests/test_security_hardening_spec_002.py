@@ -717,6 +717,66 @@ class TestSpec002SecurityHardening(unittest.TestCase):
                     srv._allow_request(f"198.51.100.{idx}")
                 self.assertLessEqual(len(srv._rate_hits), 4)
 
+    def test_req_trl_24_vm_scripts_hardened_for_public_oss(self) -> None:
+        """[REQ-TRL-24] VM scripts remove SYSTEM task, WinRM Any, process killing, and hardcoded local paths."""
+        setup_ps1 = (REPO_ROOT / "scripts" / "setup-vm-once.ps1").read_text(encoding="utf-8")
+        deploy_ps1 = (REPO_ROOT / "scripts" / "build-and-deploy.ps1").read_text(encoding="utf-8")
+
+        for forbidden in (
+            "-TakeOverPort",
+            "Stop-Process",
+            "RemoteAddress Any",
+            "WINRM-HTTP-In-TCP",
+            '-User "SYSTEM"',
+            "-RunLevel Highest",
+            r"\\tsclient\D\hta",
+            "team-ibanking",
+        ):
+            self.assertNotIn(forbidden, setup_ps1, f"Forbidden pattern in setup-vm-once.ps1: {forbidden}")
+            self.assertNotIn(forbidden, deploy_ps1, f"Forbidden pattern in build-and-deploy.ps1: {forbidden}")
+
+        self.assertIn("TRELLIS_DEPLOY_SIGNING_KEY", deploy_ps1)
+        self.assertIn("https://", deploy_ps1)
+
+    def test_req_trl_25_zero_personal_or_internal_strings_in_tracked_files(self) -> None:
+        """[REQ-TRL-25] Public repo removes internal export and scrubs personal paths, VPN IPs, and internal project names."""
+        import subprocess
+
+        self.assertFalse((REPO_ROOT / "docs" / "knowledge" / "trellis-project-export.md").exists())
+
+        tracked = subprocess.check_output(
+            ["git", "ls-files"], cwd=str(REPO_ROOT), text=True, encoding="utf-8"
+        ).splitlines()
+        banned_tokens = (
+            "d:\\hta",
+            "\\\\tsclient\\d\\hta",
+            "10.6.7.1",
+            "happ-default-tun",
+            "team-ibanking",
+            "ibanking-portal",
+            "projects/ibanking",
+            "/ibanking",
+            "wallet application",
+        )
+        violations: list[str] = []
+        for rel in tracked:
+            if rel.replace("\\", "/") == "tests/test_security_hardening_spec_002.py":
+                continue
+            path = REPO_ROOT / rel
+            if not path.is_file():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8").lower()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for tok in banned_tokens:
+                if tok in content:
+                    violations.append(f"{rel}: contains {tok!r}")
+        self.assertEqual(violations, [], f"Scrubbing violations: {violations}")
+
+        sec_md = (REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("github.com/h-t-a/trellis/security/advisories", sec_md)
+
 
 if __name__ == "__main__":
     unittest.main()

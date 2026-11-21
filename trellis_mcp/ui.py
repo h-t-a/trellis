@@ -410,7 +410,7 @@ body.light-mode .site-footer{background:rgba(248,251,246,.94)}
     <form id="generateForm" class="modal-form">
       <label class="field" for="label">
         <span>Label <span class="req">*</span></span>
-        <input id="label" required maxlength="64" autocomplete="off" placeholder="e.g. team-ibanking">
+        <input id="label" required maxlength="64" autocomplete="off" placeholder="e.g. team-alpha">
         <small>Who or what will use this key?</small>
       </label>
       <label class="field" for="role">

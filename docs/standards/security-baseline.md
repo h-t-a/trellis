@@ -1,7 +1,7 @@
 # Security Baseline
 
 **Status:** Working draft v0.1 `[SOURCE: Developers + images + docs]`  
-**Source:** [trellis-project-export.md](../knowledge/trellis-project-export.md) (Sections 3, 7)
+**Source:** Canonical Trellis engineering standard (`docs/standards/`)
 
 ---
 

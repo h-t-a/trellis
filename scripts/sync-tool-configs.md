@@ -1,8 +1,8 @@
 # Tool Configuration Sync, Multi-IDE Bridge & VM HTTP Server (`trellis-mcp`)
 
-**Status:** Implemented in `trellis_mcp/` (`v0.1.0` + `SPEC-001`)  
+**Status:** Implemented in `trellis_mcp/` (`v0.1.0` + `SPEC-001` + `SPEC-002`)  
 **Related Decision:** [ADR 0001: Single Source of Truth](../docs/decisions/0001-single-source-of-truth.md)  
-**Source:** [trellis-project-export.md](../docs/knowledge/trellis-project-export.md) (Sections 8, 10) & [001-secure-multi-ai-trellis.md](../docs/specs/001-secure-multi-ai-trellis.md)
+**Source:** [001-secure-multi-ai-trellis.md](../docs/specs/001-secure-multi-ai-trellis.md)
 
 ---
 
@@ -53,11 +53,11 @@ To support **Antigravity IDE** (`.agents/`, `GEMINI.md`, `~/.gemini/config/plugi
 
 5. **Administrator API Key Lifecycle (`--generate-key`, `--list-keys`, `--rotate-key`, `--revoke-key`):**
    ```bash
-   python -m trellis_mcp --generate-key team-ibanking --role member --expires-days 90 \
-     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_scan
+   python -m trellis_mcp --generate-key team-alpha --role member --expires-days 90 \
+     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_review
    python -m trellis_mcp --list-keys
-   python -m trellis_mcp --rotate-key team-ibanking --expires-days 90
-   python -m trellis_mcp --revoke-key team-ibanking
+   python -m trellis_mcp --rotate-key team-alpha --expires-days 90
+   python -m trellis_mcp --revoke-key team-alpha
    ```
 
 6. **Zero-Clone Remote Client Setup (`--install-remote`):**

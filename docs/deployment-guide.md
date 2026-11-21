@@ -31,53 +31,53 @@ Every foundational and `SPEC-001` component required for local development, cros
 
 Complete these steps **once** on your Windows VM (`<vm-ip>`, `<domain>\<vm-user>`):
 
-- [ ] **Step 2.1 — Bypass or Pause Local TUN Proxy for `<vm-ip>`:**
-  - If using the **Happ** TUN client (`happ-default-tun` / `10.6.7.1`) on your local workstation, add `<vm-ip>/32` to the **Direct / Bypass** routing rules so WinRM/RDP/HTTP traffic reaches the VM directly.
-- [ ] **Step 2.2 — Verify Python 3.9+ on the Windows VM:**
+- [ ] **Step 2.1 — Confirm Direct Network Reachability to `<vm-ip>`:**
+  - If your workstation uses a split-tunnel VPN or proxy, add `<vm-ip>/32` to direct routing rules so SSH/HTTPS traffic reaches the host directly.
+- [ ] **Step 2.2 — Verify Python 3.9+ on the Host:**
   - Open **PowerShell as Administrator** on `<vm-ip>` and verify Python is on the system `PATH`:
     ```powershell
     python --version
     ```
-- [ ] **Step 2.3 — Run [`scripts/setup-vm-once.ps1`](../scripts/setup-vm-once.ps1) Inside Your RDP Session (`mstsc /v:<vm-ip>`):**
-  - On a fresh Windows VM (`<vm-ip>`), only **Port 3389 (RDP)** is open by default (`WinRM 5985` and `Port 8080` are closed until initialized).
-  - Copy these 2 files from your local machine (`d:\hta\M.C.Sc_Repo\trellis`) into your RDP session on `<vm-ip>`:
+- [ ] **Step 2.3 — Run [`scripts/setup-vm-once.ps1`](../scripts/setup-vm-once.ps1) on the Host:**
+  - Copy these 2 files from your local repo (`<REPO_ROOT>`) to the host (plus your TLS certificate and private key):
     1. `dist/trellis-mcp.pyz` (build it first with `python -m trellis_mcp --build-pyz dist/trellis-mcp.pyz`)
     2. [`scripts/setup-vm-once.ps1`](../scripts/setup-vm-once.ps1)
-  - Open **PowerShell as Administrator** on the VM in that folder and run:
+  - Open **PowerShell as Administrator** in that folder and run:
     ```powershell
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    .\setup-vm-once.ps1
+    .\setup-vm-once.ps1 -BindHost 127.0.0.1 -Port 8080 -AllowedRemoteAddress 127.0.0.1
+    # Or directly with TLS on a scoped subnet:
+    # .\setup-vm-once.ps1 -BindHost 0.0.0.0 -Port 8443 -TlsCert C:\Trellis\server.crt -TlsKey C:\Trellis\server.key -PublicUrl https://trellis.example.com -AllowedRemoteAddress 10.0.0.0/24
     ```
-  - This single script creates `C:\Trellis\trellis-mcp.pyz`, opens Windows Firewall for TCP `8080` and WinRM `5985`, registers & starts the `TrellisMCP` background Scheduled Task (`AtStartup`), verifies `http://127.0.0.1:8080/healthz`, and prints your **Administrator API Key (`trl_admin_...`)** and initial **Team Member Key (`trl_team_ibanking_...`)**!
-- [ ] **Step 2.4 — Record Your Auto-Generated Admin Key & Issue Your First Team Key:**
-  - On the VM, inspect or generate keys against `C:\Trellis\.trellis_keys.json`:
+  - This script copies `trellis-mcp.pyz`, checks for port conflicts without killing other services, adds a scoped firewall rule, registers a least-privilege Scheduled Task (`LocalService`, `Limited`), verifies `/healthz`, and prints your **Administrator API Key (`trl_admin_...`)** and initial read-only **Member Key (`trl_team_alpha_...`)**.
+- [ ] **Step 2.4 — Record Your Admin Key & Issue Team Keys:**
+  - On the host, inspect or generate keys against `C:\Trellis\.trellis_keys.json`:
     ```powershell
-    # List the auto-generated admin key metadata
+    # List key metadata (masked prefixes & scopes)
     python C:\Trellis\trellis-mcp.pyz --list-keys --keys-file C:\Trellis\.trellis_keys.json
 
-    # Generate a shareable member key for another user or team
-    python C:\Trellis\trellis-mcp.pyz --generate-key team-ibanking --role member --keys-file C:\Trellis\.trellis_keys.json
+    # Generate a shareable read-only member key for a user or team
+    python C:\Trellis\trellis-mcp.pyz --generate-key team-alpha --role member --keys-file C:\Trellis\.trellis_keys.json
     ```
 
 ---
 
 ## 3. Recurring Deployment Progress Checklist (For Every Local Change)
 
-Every time you update a standard in `docs/standards/`, edit a skill in `.agents/skills/`, or modify Python code in `trellis_mcp/` on your local machine (`d:\hta\M.C.Sc_Repo\trellis`), follow this **5-step checklist**:
+Every time you update a standard in `docs/standards/`, edit a skill in `.agents/skills/`, or modify Python code in `trellis_mcp/` in your local clone (`<REPO_ROOT>`), follow this **5-step checklist**:
 
 ```mermaid
 flowchart LR
     S1["1. Sync & Doctor\n--sync-workspace\n--check"] --> S2["2. Run Automated Tests\nunittest suite"]
     S2 --> S3["3. Build Single-File .pyz\ndist/trellis-mcp.pyz"]
-    S3 --> S4["4. Push 1 File to VM\nC:\\Trellis\\trellis-mcp.pyz\n& Restart Task"]
-    S4 --> S5["5. Verify /healthz\n& Client Bundle"]
+    S3 --> S4["4. Deploy Artifact\nHTTPS or Manual Replace\n& Restart Task"]
+    S4 --> S5["5. Verify /healthz\n& Signed Bundle"]
 ```
 
 ### Checklist to Run on Every Deployment
 
 - [ ] **1. Sync Skills & Run Workspace Doctor (Local):**
   ```powershell
-  cd d:\hta\M.C.Sc_Repo\trellis
+  cd <REPO_ROOT>
   python -m trellis_mcp --sync-workspace
   python -m trellis_mcp --check
   ```
@@ -87,7 +87,7 @@ flowchart LR
   ```powershell
   python -m unittest discover -s tests -v
   ```
-  *Expected:* `Ran 42 tests ... OK` (Never deploy if any test fails).
+  *Expected:* All tests pass (`OK`). Never deploy if any test fails.
 
 - [ ] **3. Build the Standalone `dist\trellis-mcp.pyz` Artifact (Local):**
   ```powershell
@@ -96,20 +96,16 @@ flowchart LR
   *Expected:* `Built standalone single-file bundle: ...\dist\trellis-mcp.pyz`.
   *(Note: Steps 1–3 can all be run with a single command: `.\scripts\build-and-deploy.ps1`)*
 
-- [ ] **4. Deploy `dist\trellis-mcp.pyz` to Windows VM (`<vm-ip>`):**
-   - **Option A — Zero-WinRM HTTP Hot-Deploy over Port 8080 (`POST /admin/deploy`, Recommended):**
+- [ ] **4. Deploy `dist\trellis-mcp.pyz` to Host:**
+   - **Option A — Signed HTTPS Hot-Deploy (`POST /admin/deploy`, opt-in only via `--enable-remote-deploy` + separate `--deploy-signing-key`):**
      ```powershell
-     .\scripts\build-and-deploy.ps1 -VmHost <vm-ip> -ApiKey "<YOUR_ADMIN_API_KEY>"
+     .\scripts\build-and-deploy.ps1 -ServerUrl https://trellis.example.com -ApiKey "<ADMIN_API_KEY>" -DeploySigningKey "<DEPLOY_SIGNING_KEY>"
      ```
-     *Uploads `dist\trellis-mcp.pyz` directly over HTTP port `8080` using your `trl_admin_...` key and hot-reloads the server in memory—no WinRM or `TrustedHosts` required. The script signs the payload with `X-Trellis-Signature: HMAC-SHA256(pyz_bytes, admin_key)`; unsigned uploads are rejected with `400` and invalid signatures with `403`.*
-  - **Option B — Automated via WinRM (Auto-Configures `TrustedHosts`):**
-    ```powershell
-    .\scripts\build-and-deploy.ps1 -VmHost <vm-ip> -VmUser "<domain>\<vm-user>"
-    ```
-  - **Or Manual via RDP File Copy:**
-    1. Stop task on VM: `Stop-ScheduledTask -TaskName "TrellisMCP"`
-    2. Replace `C:\Trellis\trellis-mcp.pyz` with your new `dist\trellis-mcp.pyz` *(do not delete `C:\Trellis\.trellis_keys.json` so existing keys stay valid)*.
-    3. Start task on VM: `Start-ScheduledTask -TaskName "TrellisMCP"`
+     *Signs payload with `X-Trellis-Signature: HMAC-SHA256(pyz_bytes, deploy_signing_key)` (distinct from the admin bearer token), verifies monotonic version bump, creates `.pyz.bak`, and atomically swaps via `os.replace()`.*
+  - **Option B — Manual Artifact Copy (Recommended when `/admin/deploy` remains disabled):**
+    1. Stop task on host: `Stop-ScheduledTask -TaskName "TrellisMCP"`
+    2. Replace `C:\Trellis\trellis-mcp.pyz` with your new `dist\trellis-mcp.pyz` *(keep `.trellis_keys.json` intact)*.
+    3. Start task on host: `Start-ScheduledTask -TaskName "TrellisMCP"`
 
 - [ ] **5. Post-Deployment Smoke Verification:**
   ```powershell

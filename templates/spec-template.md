@@ -59,7 +59,7 @@ Every requirement must carry a unique `[REQ-NNN-XX]` ID that will be cited in au
 - **Boundary Inputs:** `[Null/empty, max payload size, malformed input, rate limits]`
 
 ### 7. Performance SLA & Complexity Constraints ([performance-sla.md](../docs/standards/performance-sla.md))
-- **Target Workload ($n$, TPS, Concurrency):** `[e.g., 10,000 TPS Wallet / 1,000+ TPS Web Portal]`
+- **Target Workload ($n$, TPS, Concurrency):** `[e.g., 1,000 TPS Checkout API / 500 concurrent Web Portal sessions]`
 - **Latency & Error Budget:** `[e.g., p95 < 500 ms, p99 < 1.5 s, error rate < 0.1%]`
 - **I/O & Algorithmic Complexity Target:** `[Max DB queries/request, index requirements, Big-O ceiling]`
 

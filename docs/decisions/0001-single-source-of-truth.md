@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (v0.1) `[DRAFT]`
 - **Date:** 2026-10-15
-- **Source:** [trellis-project-export.md](../knowledge/trellis-project-export.md) (Sections 2.2, 2.3, 8, 10)
+- **Source:** Canonical Trellis engineering architecture baseline (`docs/standards/`)
 
 ---
 

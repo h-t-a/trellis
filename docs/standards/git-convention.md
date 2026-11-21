@@ -1,7 +1,7 @@
 # Git Convention and Commit Guidelines (Enterprise Banking Standard)
 
 **Status:** Working standard v0.1 (Aligned with Angular Conventional Commits & Enterprise Banking Standards)  
-**Source:** Adapted from the Digital Banking (`ibanking-portal`) Git Convention Standard  
+**Source:** Adapted from Enterprise Financial Web Application Git Convention Patterns  
 **Related Standards:** [definition-of-done.md](./definition-of-done.md), [testing-standard.md](./testing-standard.md), [security-baseline.md](./security-baseline.md)
 
 ---
@@ -101,43 +101,43 @@ When committing to this `ai-dev-playbook` (`trellis`) repository, use these scop
 | `scripts` | `scripts/*` | Tool configuration sync and validation scripts/notes |
 | `git` | `.gitignore`, `.env.example`, `.mcp.json` | Repository-level tracking and baseline configuration |
 
-### 3.2 Reference Banking Application Scope Matrix (Example: `ibanking-portal`)
+### 3.2 Reference Financial Application Scope Matrix (Example: `example-portal`)
 
-When adopting this standard in a digital banking application, map scopes to clean-architecture layers and banking domains:
+When adopting this standard in a digital banking or financial web application, map scopes to clean-architecture layers and domain modules:
 
-| Scope | Target Codebase Location (Example) | Typical Banking Responsibility |
+| Scope | Target Codebase Location (Example) | Typical Domain Responsibility |
 | :--- | :--- | :--- |
 | `router` | `src/app/app.routes.ts`, `app.config.ts`, `projects/**/routes.ts` | PathLocation strategy, root navigation, lazy routes |
 | `auth` | `projects/iam/src/app/features/login`, `verify`, `change-password` | Login credentials, MFA/OTP verification, password reset |
 | `session` | `src/app/guards/auth.guard.ts`, `src/app/interceptors/auth.interceptor.ts` | Token lifecycle, auto-logout on 401/403, session expiry |
-| `transfers` | `projects/ibanking/src/app/features/transfers/*` | Own/other account transfer, payee transfer, transfer progress |
-| `accounts` | `projects/ibanking/src/app/features/accounts/*` | Account balance inquiry, transaction history, statement download |
-| `dashboard` | `projects/ibanking/src/app/features/dashboard/*` | Financial overview, account summary cards, quick actions |
-| `payments` | `projects/ibanking/src/app/features/payments/*` | Bill payments, utility payments, merchant QR transactions |
-| `cheques` | `projects/ibanking/src/app/features/cheques/*` | Cheque inquiry, stop payment, cheque book ordering |
-| `authz` | `projects/ibanking/src/app/features/authorization/*` | Maker-checker approval matrix and corporate workflow |
-| `settings` | `projects/ibanking/src/app/features/settings/*` | Payee management, standing instructions (SI), user profile |
+| `transfers` | `projects/portal/src/app/features/transfers/*` | Own/other account transfer, payee transfer, transfer progress |
+| `accounts` | `projects/portal/src/app/features/accounts/*` | Account balance inquiry, transaction history, statement download |
+| `dashboard` | `projects/portal/src/app/features/dashboard/*` | Financial overview, account summary cards, quick actions |
+| `payments` | `projects/portal/src/app/features/payments/*` | Bill payments, utility payments, merchant QR transactions |
+| `cheques` | `projects/portal/src/app/features/cheques/*` | Cheque inquiry, stop payment, cheque book ordering |
+| `authz` | `projects/portal/src/app/features/authorization/*` | Maker-checker approval matrix and corporate workflow |
+| `settings` | `projects/portal/src/app/features/settings/*` | Payee management, standing instructions (SI), user profile |
 | `layout` | `src/app/components/layout/`, `sidebar/`, `navbar/` | Main shell drawer, collapsible menu, header alerts |
 | `core` | `src/app/core/*` | Clean Architecture domain ports, use-cases, and repositories |
 | `config` | `src/app/services/config.service.ts`, `src/assets/config.json` | API URLs, app ID, runtime toggles |
 | `firebase` | `src/app/services/firebase.service.ts`, `public/firebase-*.js` | Push notifications, analytics, screen logging |
-| `i18n` | `src/assets/i18n/*` | Multi-language translation keys (Myanmar / English) |
+| `i18n` | `src/assets/i18n/*` | Multi-language translation keys |
 | `security` | `staticwebapp.config.json`, CSP headers, cookie policies | Content-Security-Policy, HSTS, secure cookie attributes |
 
 ---
 
-## 4. Good vs. Bad Commit Examples (Banking Case Studies)
+## 4. Good vs. Bad Commit Examples (Case Studies)
 
 ### Example 1: Endpoint & Routing Upgrade
 - **Bad:** `git commit -m "route mapping"` *(Vague, missing type and scope)*
-- **Bad:** `git commit -m "feat: Updated localhost 4200 ibanking URL"` *(Capitalized, past tense, missing scope)*
+- **Bad:** `git commit -m "feat: Updated localhost 4200 portal URL"` *(Capitalized, past tense, missing scope)*
 - **Good:**
   ```text
   feat(router): switch from hash routing to path-based location strategy
 
   - remove withHashLocation from provideRouter in app.config.ts
-  - map default startup endpoint directly to /ibanking
-  - update firebase service to resolve screen name from location pathname
+  - map default startup endpoint directly to /portal
+  - update analytics service to resolve screen name from location pathname
   ```
 
 ### Example 2: Build Budget Threshold Adjustment
@@ -168,7 +168,7 @@ When adopting this standard in a digital banking application, map scopes to clea
   sec(session): enforce token revocation and redirect on 401 error
 
   - clear authentication cookies and local cache on HTTP 401/403 response
-  - display session expired notification and navigate to /ibanking
+  - display session expired notification and navigate to /login
   ```
 
 ---

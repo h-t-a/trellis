@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="LABEL",
         type=str,
         default=None,
-        help="Generate a new API key for a user or team (e.g. --generate-key team-ibanking) ([REQ-MCP-08-02]).",
+        help="Generate a new API key for a user or team (e.g. --generate-key team-alpha) ([REQ-MCP-08-02]).",
     )
     parser.add_argument(
         "--role",
