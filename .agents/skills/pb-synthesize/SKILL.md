@@ -1,6 +1,7 @@
 ---
 name: pb-synthesize
-description: Combine independent answers from multiple AI models into an explicit agreement and divergence matrix without silent voting. Invoke as /pb-synthesize.
+description: Use when comparing multi-model outputs to detect consensus and divergence. Not for single-model code generation or review.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [ai-boundary, definition-of-done]}
 ---
 
 # Skill: `/pb-synthesize` — Multi-AI Consensus & Divergence Matrix

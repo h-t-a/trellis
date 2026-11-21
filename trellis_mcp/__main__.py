@@ -48,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Install Trellis plugin, rules, skills, and MCP server globally into ~/.gemini/config/ and ~/.claude/.",
     )
     parser.add_argument(
+        "--packs",
+        type=str,
+        default="core,data,security",
+        help="Comma-separated skill packs to install (e.g. core,data,security or all).",
+    )
+    parser.add_argument(
         "--install-remote",
         metavar="SERVER_URL",
         type=str,
@@ -411,7 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.install_global:
-        print(install_global(root))
+        selected_packs = [p.strip() for p in (args.packs or "").split(",") if p.strip()]
+        print(install_global(root, packs=selected_packs))
         return 0
 
     if args.migrate_keys:

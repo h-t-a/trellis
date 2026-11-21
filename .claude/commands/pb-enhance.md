@@ -1,6 +1,7 @@
 ---
 name: pb-enhance
-description: Analyze workload, I/O round-trips, and Time/Space Big-O complexity (analyze mode) or implement a complexity-optimal enhancement with benchmarks (implement mode). Invoke as /pb-enhance.
+description: Use when profiling workloads, I/O round-trips, and Big-O complexity. Not for basic bug fixing or documentation changes.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [complexity-and-performance, performance-sla, testing-standard]}
 ---
 
 # Skill: `/pb-enhance` — Complexity-Aware Enhancement & Analysis

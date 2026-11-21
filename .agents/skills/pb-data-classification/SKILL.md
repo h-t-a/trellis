@@ -1,6 +1,7 @@
 ---
 name: pb-data-classification
-description: Classify prompts/files into Public, Internal, Confidential, or Restricted tiers and scan for Luhn PANs, JWTs, Myanmar NRC/phones, IBANs, and credentials. Invoke as /pb-data-classification.
+description: Use when classifying data into Public/Internal/Restricted tiers and scanning PII. Not for threat modeling or network audits.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [data-classification, security-baseline, ai-boundary]}
 ---
 
 # Skill: `/pb-data-classification` — Data Tier & Secret/PII Guard

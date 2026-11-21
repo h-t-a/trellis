@@ -1,6 +1,7 @@
 ---
 name: pb-knowledge
-description: Run vMF hyperspherical semantic search across Trellis standards and prior RCAs with kappa confidence, caller clearance filtering, and token compression. Invoke as /pb-knowledge.
+description: Use when searching engineering standards and prior RCAs with vMF semantic search. Not for general internet web searches.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [documentation-standard, quota-efficiency, security-baseline]}
 ---
 
 # Skill: `/pb-knowledge` — Semantic Knowledge & Ingestion Gate

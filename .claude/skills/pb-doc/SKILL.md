@@ -1,6 +1,7 @@
 ---
 name: pb-doc
-description: Audit, scaffold, and validate project documentation across Diátaxis, ADRs, C4/arc42, API/DB/IaC contracts, SRE runbooks, AGENTS.md, and CI gates. Invoke as /pb-doc.
+description: Use when auditing or writing ADRs, C4 diagrams, and Diátaxis documentation. Not for implementation code or unit tests.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [documentation-standard, definition-of-done, security-baseline]}
 ---
 
 # Skill: `/pb-doc` — Project Documentation Audit & Scaffolding

@@ -1,6 +1,7 @@
 ---
 name: pb-security-audit
-description: Audit code, configuration, hooks, and AI customizations against the Security Baseline and AI Boundary tiers. Invoke as /pb-security-audit.
+description: Use when auditing code, configurations, and hooks against the Security Baseline. Not for functional testing or performance tuning.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [security-baseline, ai-boundary]}
 ---
 
 # Skill: `/pb-security-audit` — Security & AI Boundary Audit

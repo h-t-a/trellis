@@ -1,6 +1,7 @@
 ---
 name: pb-plan
-description: Classify task cost/risk (S/M/L & AI Boundary Tier 1-3), draft an Implementation Plan artifact, and pause for human approval before writing code. Invoke as /pb-plan.
+description: Use when scoping tasks, estimating cost, and requesting Tier 2 human approval. Not for bug diagnosis or writing production code.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [definition-of-done, ai-boundary, quota-efficiency, testing-standard]}
 ---
 
 # Skill: `/pb-plan` — Implementation Plan & Tier 2 Approval Gate

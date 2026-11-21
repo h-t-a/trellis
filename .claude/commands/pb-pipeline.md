@@ -1,6 +1,7 @@
 ---
 name: pb-pipeline
-description: Orchestrate the end-to-end Trellis stage state machine (discover -> spec -> approve -> plan -> implement -> verify -> review -> done) with Tier 2 approval gates, loop halts, and cross-model review. Invoke as /pb-pipeline.
+description: Use when orchestrating multi-stage development workflows with approval gates. Not for single-file Class S edits.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [ai-boundary, definition-of-done, security-baseline]}
 ---
 
 # Skill: `/pb-pipeline` — Multi-Stage Governance Pipeline

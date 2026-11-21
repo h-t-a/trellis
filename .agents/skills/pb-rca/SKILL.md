@@ -1,6 +1,7 @@
 ---
 name: pb-rca
-description: Fast 9-step Root-Cause Analysis and minimal bug fix workflow with Tier 3 PII/secret redaction gate. Invoke as /pb-rca when diagnosing exceptions, failing tests, latency regressions, or deadlocks.
+description: Use when diagnosing exceptions, failing tests, or latency regressions. Not for new feature specifications or architecture design.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [rca-playbook, testing-standard, ai-boundary]}
 ---
 
 # Skill: `/pb-rca` — Fast Root-Cause Analysis & Minimal Fix

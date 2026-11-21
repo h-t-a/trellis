@@ -93,14 +93,50 @@ def _merge_mcp_config(
 
 
 def sync_workspace(repo_root: Path) -> str:
-    """Synchronize `.agents/skills/` to `.claude/skills/` and configure workspace MCP files."""
+    """Synchronize canonical `skills/<pack>/` to `.agents/skills/`, `.claude/skills/`, and configure workspace MCP files."""
     root = repo_root.resolve()
+    canonical_skills_dir = root / "skills"
     agents_skills_dir = root / ".agents" / "skills"
     claude_skills_dir = root / ".claude" / "skills"
     claude_commands_dir = root / ".claude" / "commands"
 
     synced_skills: list[str] = []
-    if agents_skills_dir.exists():
+
+    if canonical_skills_dir.exists():
+        agents_skills_dir.mkdir(parents=True, exist_ok=True)
+        claude_skills_dir.mkdir(parents=True, exist_ok=True)
+        claude_commands_dir.mkdir(parents=True, exist_ok=True)
+
+        for pack_dir in sorted(canonical_skills_dir.iterdir()):
+            if not pack_dir.is_dir() or pack_dir.name.startswith("."):
+                continue
+            for skill_md in sorted(pack_dir.glob("*/SKILL.md")):
+                skill_name = skill_md.parent.name
+                dest_agent = agents_skills_dir / skill_name
+                dest_agent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(skill_md, dest_agent / "SKILL.md")
+
+                dest_claude = claude_skills_dir / skill_name
+                dest_claude.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(skill_md, dest_claude / "SKILL.md")
+                synced_skills.append(skill_name)
+
+                if skill_name.startswith("pb-"):
+                    command_text = skill_md.read_text(encoding="utf-8").replace("(../../../", "(../../")
+                    (claude_commands_dir / f"{skill_name}.md").write_text(command_text, encoding="utf-8")
+
+        synced_set = set(synced_skills)
+        for existing_dir in sorted(agents_skills_dir.iterdir()):
+            if existing_dir.is_dir() and existing_dir.name not in synced_set:
+                shutil.rmtree(existing_dir, ignore_errors=True)
+        for existing_dir in sorted(claude_skills_dir.iterdir()):
+            if existing_dir.is_dir() and existing_dir.name not in synced_set:
+                shutil.rmtree(existing_dir, ignore_errors=True)
+        for existing_cmd in sorted(claude_commands_dir.glob("*.md")):
+            if existing_cmd.stem not in synced_set:
+                existing_cmd.unlink(missing_ok=True)
+
+    elif agents_skills_dir.exists():
         claude_skills_dir.mkdir(parents=True, exist_ok=True)
         claude_commands_dir.mkdir(parents=True, exist_ok=True)
         for skill_md in sorted(agents_skills_dir.glob("*/SKILL.md")):
@@ -159,10 +195,18 @@ def sync_workspace(repo_root: Path) -> str:
     )
 
 
-def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
+def install_global(
+    repo_root: Path,
+    home_dir: Path | None = None,
+    packs: list[str] | None = None,
+) -> str:
     """Install Trellis plugin, rules, skills, and `trellis-mcp` globally into the user's home directory."""
     root = repo_root.resolve()
     home = (home_dir or Path.home()).resolve()
+
+    selected_packs = [p.strip().lower() for p in (packs or ["core", "data", "security"]) if p.strip()]
+    if "all" in selected_packs:
+        selected_packs = ["all"]
 
     plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
     plugin_rules_dir = plugin_dir / "rules"
@@ -195,18 +239,34 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
             encoding="utf-8",
         )
 
-    # 3. Copy all workspace skills into ~/.gemini/config/plugins/trellis/skills/ and ~/.claude/skills/
+    # 3. Copy workspace skills into ~/.gemini/config/plugins/trellis/skills/ and ~/.claude/skills/
     claude_global_skills = home / ".claude" / "skills"
     claude_global_skills.mkdir(parents=True, exist_ok=True)
 
-    bundled_skills = list_bundled_skills(workspace_root=root)
     installed_skills: list[str] = []
-    for skill_name, skill_text in sorted(bundled_skills.items()):
-        for target_base in (plugin_skills_dir, claude_global_skills):
-            dest = target_base / skill_name
-            dest.mkdir(parents=True, exist_ok=True)
-            (dest / "SKILL.md").write_text(skill_text, encoding="utf-8")
-        installed_skills.append(skill_name)
+    canonical_skills = root / "skills"
+    if canonical_skills.is_dir():
+        for pack_dir in sorted(canonical_skills.iterdir()):
+            if not pack_dir.is_dir() or pack_dir.name.startswith("."):
+                continue
+            if "all" not in selected_packs and pack_dir.name.lower() not in selected_packs:
+                continue
+            for skill_md in sorted(pack_dir.glob("*/SKILL.md")):
+                skill_name = skill_md.parent.name
+                skill_text = skill_md.read_text(encoding="utf-8")
+                for target_base in (plugin_skills_dir, claude_global_skills):
+                    dest = target_base / skill_name
+                    dest.mkdir(parents=True, exist_ok=True)
+                    (dest / "SKILL.md").write_text(skill_text, encoding="utf-8")
+                installed_skills.append(skill_name)
+    else:
+        bundled_skills = list_bundled_skills(workspace_root=root)
+        for skill_name, skill_text in sorted(bundled_skills.items()):
+            for target_base in (plugin_skills_dir, claude_global_skills):
+                dest = target_base / skill_name
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / "SKILL.md").write_text(skill_text, encoding="utf-8")
+            installed_skills.append(skill_name)
 
     # 4. Write global MCP server entry with portable PYTHONPATH pointing to repo_root
     py_cmd = "python" if sys.platform == "win32" else "python3"
@@ -222,7 +282,7 @@ def install_global(repo_root: Path, home_dir: Path | None = None) -> str:
         f"Installed `trellis-mcp` globally:\n"
         f"- Antigravity plugin: `{plugin_dir}`\n"
         f"- Global MCP config: `{home / '.gemini/config/mcp_config.json'}`\n"
-        f"- Claude Code global skills: `{claude_global_skills}` ({len(installed_skills)} skills)"
+        f"- Claude Code global skills: `{claude_global_skills}` ({len(installed_skills)} skills: {', '.join(installed_skills)})"
     )
 
 
@@ -303,6 +363,8 @@ def build_pyz_bundle(repo_root: Path, output_path: Path) -> str:
             "templates/*.md",
             ".agents/rules/*.md",
             ".agents/skills/*/SKILL.md",
+            "skills/*/*/SKILL.md",
+            "skills/skills.index.json",
         ]
         for pattern in include_patterns:
             for file_path in sorted(root.glob(pattern)):

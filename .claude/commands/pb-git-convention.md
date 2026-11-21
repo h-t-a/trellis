@@ -1,6 +1,7 @@
 ---
 name: pb-git-convention
-description: Enforce Conventional Commits, banking commit types (sec/audit/feat/fix), semantic branch names, and pre-push secret/test verification. Invoke as /pb-git-convention.
+description: Use when crafting Conventional Commits, branch names, and verifying pre-push gates. Not for resolving code review comments.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [git-convention, security-baseline]}
 ---
 
 # Skill: `/pb-git-convention` — Conventional Commits & Branch Hygiene
