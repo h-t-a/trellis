@@ -1259,13 +1259,43 @@ def tool_trellis_doctor(
                 findings.append(f"`{ctx_name}` is {len(c_lines)} lines (exceeds <200 line budget)")
 
     # 5. Validate JSON configuration files
-    for rel in (".mcp.json", ".agents/mcp_config.json", ".agents/skills.json", ".claude/settings.json"):
+    for rel in (".mcp.json", ".agents/mcp_config.json", ".agents/skills.json", ".claude/settings.json", "docs/standards/ai-bom.json"):
         cfg_path = root / rel
         if cfg_path.is_file():
             try:
                 json.loads(cfg_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 findings.append(f"Invalid JSON in `{rel}`: {exc}")
+
+    # 5b. Audit ai-bom.json catalog freshness & deprecations ([REQ-TRL-28])
+    aibom_path = root / "docs" / "standards" / "ai-bom.json"
+    if aibom_path.is_file():
+        try:
+            import datetime
+            aibom_data = json.loads(aibom_path.read_text(encoding="utf-8"))
+            today = datetime.date.today()
+            for m in aibom_data.get("models", []):
+                mid = m.get("id", "unknown")
+                dep = m.get("deprecation")
+                if dep:
+                    try:
+                        dep_d = datetime.date.fromisoformat(str(dep))
+                        if dep_d <= today:
+                            findings.append(f"Model `{mid}` in `ai-bom.json` is deprecated as of {dep_d}")
+                    except ValueError:
+                        pass
+                last_v = m.get("last_verified")
+                if not last_v:
+                    findings.append(f"Model `{mid}` in `ai-bom.json` is missing `last_verified` date")
+                else:
+                    try:
+                        v_d = datetime.date.fromisoformat(str(last_v))
+                        if (today - v_d).days > 90:
+                            findings.append(f"Model `{mid}` in `ai-bom.json` has not been verified in >90 days (last verified {v_d})")
+                    except ValueError:
+                        pass
+        except Exception as exc:
+            findings.append(f"Could not audit `docs/standards/ai-bom.json`: {exc}")
 
     # 6. Check Claude Code skill mirror parity
     if skills_dir.exists():

@@ -50,7 +50,9 @@ trellis/
 │   └── installer.py                 # Workspace sync, global installer, zero-clone remote installer, single-file .pyz builder
 ├── tests/
 │   ├── test_trellis_mcp.py          # Core MCP, HTTP, RBAC, P2/P3 requirement tests ([REQ-MCP-01..10], [REQ-P2/P3-*])
-│   └── test_spec_001_upgrades.py    # SPEC-001 hardening, vMF, router, pipeline, synthesis & skill sync tests ([REQ-TRL-01..15])
+│   ├── test_spec_001_upgrades.py    # SPEC-001 hardening, vMF, router, pipeline, synthesis & skill sync tests ([REQ-TRL-01..15])
+│   ├── test_security_hardening_spec_002.py # SPEC-002 write isolation, path containment, deploy key, TLS & CI tests ([REQ-TRL-17..30])
+│   └── test_vmf_bm25_benchmark.py   # Retrieval benchmark suite: vMF hyperspherical vs Okapi BM25 ([REQ-TRL-29])
 ├── .agents/                         # Antigravity IDE configuration
 │   ├── mcp_config.json              # Workspace MCP configuration for Antigravity IDE
 │   ├── skills.json                  # Skills manifest pointing to .agents/skills
@@ -162,7 +164,7 @@ See the full workflow & JSON/CLI examples in **[How to Use Trellis (`docs/how-to
 
 Every model configured in [`docs/standards/ai-bom.json`](./docs/standards/ai-bom.json) and [`trellis_mcp/router.py`](./trellis_mcp/router.py) carries commercial API rights or permissive/commercial open-weight licensing (`non-commercial`, `research-only`, `CC-BY-NC`, and `AGPL-without-exception` are excluded):
 
-- **`Public` (Commercial Cloud + Web Grounding):** `perplexity/sonar-pro`, `perplexity/sonar-reasoning-pro`, `perplexity/sonar`, `xai/grok-4`, `xai/grok-4-fast`, `xai/grok-3`, `gemini/gemini-2.5-pro`, `gemini/gemini-2.5-flash`, `anthropic/claude-sonnet-4`, `anthropic/claude-opus-4`, `openai/gpt-5`, `openai/gpt-5-codex`, `mistral/mistral-large-latest`
+- **`Public` (Commercial Cloud + Web Grounding):** `perplexity/sonar-pro`, `perplexity/sonar-reasoning-pro`, `perplexity/sonar`, `xai/grok-4`, `xai/grok-4-fast`, `xai/grok-3`, `gemini/gemini-2.5-pro`, `gemini/gemini-2.5-flash`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-opus-5-5`, `openai/gpt-5`, `openai/gpt-5-codex`, `mistral/mistral-large-latest`
 - **`Internal` (Commercial Non-Search Cloud):** Excludes live web-search endpoints (`perplexity/*`) automatically while routing across `anthropic/*`, `openai/*`, `gemini/*`, `xai/*`, `mistral/*` with on-prem fallbacks.
 - **`Confidential` / `Restricted` / `Tier >= 3` (Strict On-Prem Only):** Blocks all cloud APIs and routes exclusively to commercial open-weight local models (`on_prem/qwen2.5-coder:32b`, `on_prem/qwen2.5:32b`, `on_prem/qwen2.5:7b`, `on_prem/mistral-nemo:12b`, `on_prem/nomic-embed-text` under **Apache-2.0**, and `on_prem/llama-3.3-70b-instruct` under **Meta Llama 3.3 Community License**).
 
@@ -227,7 +229,7 @@ See the full [Deployment & Release Progress Guide (`docs/deployment-guide.md`)](
 
 ## 6. Verification & Automated Tests
 
-Run the full requirement-linked test suite (`56` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..25]`, `[REQ-DOC-01..06]`):
+Run the full requirement-linked test suite (`62` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..30]`, `[REQ-DOC-01..06]`):
 ```bash
 python -m unittest discover -s tests -v
 python -m trellis_mcp --sync-workspace

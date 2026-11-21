@@ -1,8 +1,10 @@
-"""Knowledge layer with L2-normalized vectors and von Mises-Fisher (vMF) directional statistics ([REQ-TRL-08..10, 14]).
+"""Knowledge layer with L2-normalized vectors and von Mises-Fisher (vMF) directional statistics ([REQ-TRL-08..10, 14, 29]).
 
 Core operates with zero external dependencies using sparse TF-IDF unit vectors and spherical clustering.
 Optional `numpy` (via `trellis-mcp[knowledge]`) or a pluggable `embedder` callable accelerates dense vMF EM.
 Security decisions always combine directional scores with provenance, clearance, and content policy.
+Note on security boundaries: prompt injection filters are heuristic best-effort regex defenses ([REQ-TRL-29]),
+not an absolute security boundary.
 """
 
 from __future__ import annotations
@@ -34,6 +36,10 @@ _INJECTION_PATTERNS = [
     re.compile(r"\b(?:curl|wget)\s+https?://.*?(?:-d\b|--data\b|@)", re.IGNORECASE),
     re.compile(r"</?untrusted_context[^>]*>", re.IGNORECASE),
 ]
+_INJECTION_NOTE = (
+    "Prompt injection patterns in _INJECTION_PATTERNS are heuristic best effort defenses ([REQ-TRL-29]), "
+    "not an impenetrable security boundary."
+)
 
 _INDEX_CACHE: dict[str, tuple[tuple[int, float], list[dict[str, Any]]]] = {}
 

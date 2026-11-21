@@ -864,6 +864,79 @@ class TestSpec002SecurityHardening(unittest.TestCase):
             updated3 = json.loads(cfg_file.read_text(encoding="utf-8"))
             self.assertEqual(updated3["mcpServers"]["trellis-mcp"]["command"], "python3")
 
+    def test_req_trl_28_data_driven_aibom_and_router_catalog(self) -> None:
+        """[REQ-TRL-28] ai-bom.json contains verified models, aliases, and router loads catalog dynamically."""
+        from trellis_mcp.router import load_aibom_catalog, select_route
+        from trellis_mcp.tools import tool_trellis_doctor
+
+        # 1. Inspect docs/standards/ai-bom.json
+        aibom_path = REPO_ROOT / "docs" / "standards" / "ai-bom.json"
+        self.assertTrue(aibom_path.is_file(), "Missing docs/standards/ai-bom.json")
+        aibom = json.loads(aibom_path.read_text(encoding="utf-8"))
+        models = aibom.get("models", [])
+        self.assertGreater(len(models), 10)
+
+        # Check fields and verified status
+        model_ids = {m["id"] for m in models}
+        self.assertIn("anthropic/claude-sonnet-5-5", model_ids)
+        self.assertIn("anthropic/claude-opus-5-5", model_ids)
+        self.assertIn("gemini/gemini-2.5-pro", model_ids)
+        self.assertIn("openai/gpt-5", model_ids)
+
+        for m in models:
+            self.assertIn("last_verified", m, f"Model {m['id']} missing last_verified")
+            self.assertIn("deprecation", m, f"Model {m['id']} missing deprecation field")
+            self.assertIn("aliases", m, f"Model {m['id']} missing aliases field")
+
+        # 2. Router dynamically loads from ai-bom.json
+        catalog = load_aibom_catalog(workspace_root=REPO_ROOT)
+        self.assertIn("on_prem", catalog)
+        self.assertIn("cloud_chains", catalog)
+
+        # 3. Dynamic route resolution
+        route = select_route(task_type="coding", data_classification="Internal", tier=2, workspace_root=REPO_ROOT)
+        self.assertEqual(route["primary"]["provider"], "anthropic")
+        self.assertIn("claude-sonnet-5-5", route["primary"]["model"])
+
+        # 4. Doctor checks stale models (>90 days) or deprecation
+        doc_res = tool_trellis_doctor({"auto_fix": False, "dry_run": True}, workspace_root=REPO_ROOT)
+        doc_text = doc_res["content"][0]["text"]
+        self.assertIn("Trellis Workspace Doctor Report", doc_text)
+
+    def test_req_trl_29_vmf_vs_bm25_retrieval_benchmark(self) -> None:
+        """[REQ-TRL-29] Benchmark suite compares vMF vs BM25 retrieval over standards; injection labeled best-effort."""
+        import trellis_mcp.knowledge as km
+
+        # Ensure module describes prompt injection detection as heuristic/best-effort
+        self.assertIn("best effort", km.__doc__.lower() + km._INJECTION_NOTE.lower())
+
+        # Run benchmark runner
+        from tests.test_vmf_bm25_benchmark import run_standards_benchmark
+        results = run_standards_benchmark(REPO_ROOT)
+        self.assertGreaterEqual(results["query_count"], 20)
+        self.assertGreater(results["vmf_mrr"], 0.40)
+        self.assertGreater(results["bm25_mrr"], 0.40)
+
+    def test_req_trl_30_threat_model_and_spec_002_alignment(self) -> None:
+        """[REQ-TRL-30] docs/standards/threat-model.md and docs/specs/002-security-hardening.md document STRIDE and findings."""
+        tm_path = REPO_ROOT / "docs" / "standards" / "threat-model.md"
+        self.assertTrue(tm_path.is_file(), "Missing docs/standards/threat-model.md")
+        tm_text = tm_path.read_text(encoding="utf-8")
+
+        for heading in ("STRIDE", "Assets", "Threat Actors", "Spoofing", "Tampering", "Elevation of Privilege"):
+            self.assertIn(heading, tm_text)
+
+        spec2_path = REPO_ROOT / "docs" / "specs" / "002-security-hardening.md"
+        self.assertTrue(spec2_path.is_file(), "Missing docs/specs/002-security-hardening.md")
+        spec2_text = spec2_path.read_text(encoding="utf-8")
+        self.assertIn("SPEC-002", spec2_text)
+        self.assertIn("REQ-TRL-17", spec2_text)
+        self.assertIn("REQ-TRL-30", spec2_text)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
 
 if __name__ == "__main__":
     unittest.main()
