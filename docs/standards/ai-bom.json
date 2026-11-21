@@ -1,7 +1,8 @@
 {
   "schema": "trellis-ai-bom/v1",
   "project": "trellis",
-  "spec": "SPEC-001",
+  "spec": "SPEC-002",
+  "last_catalog_verification": "2026-11-21",
   "runtime": {
     "core_dependencies": "Python >=3.9 stdlib (zero external runtime dependencies)",
     "optional_extras": {
@@ -33,7 +34,10 @@
       "license": "Commercial API (Google Gemini / Vertex AI Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "tier2", "spec", "review", "research", "synthesize"]
+      "recommended_tasks": ["tier1", "tier2", "spec", "review", "research", "synthesize", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["gemini-pro-latest", "gemini-pro", "gemini-2.5-pro"]
     },
     {
       "id": "gemini/gemini-2.5-flash",
@@ -42,25 +46,46 @@
       "license": "Commercial API (Google Gemini / Vertex AI Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "classify", "scan"]
+      "recommended_tasks": ["tier1", "classify", "scan"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["gemini-flash-latest", "gemini-flash", "gemini-2.5-flash"]
     },
     {
-      "id": "anthropic/claude-sonnet-4",
+      "id": "anthropic/claude-sonnet-5-5",
       "provider": "anthropic",
       "deployment": "cloud-api",
       "license": "Commercial API (Anthropic / Bedrock / Vertex Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "tier2", "coding", "review", "synthesize"]
+      "recommended_tasks": ["tier1", "tier2", "coding", "review", "synthesize", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["claude-sonnet-latest", "claude-sonnet", "claude-sonnet-5", "claude-sonnet-4"]
     },
     {
-      "id": "anthropic/claude-opus-4",
+      "id": "anthropic/claude-opus-5-5",
       "provider": "anthropic",
       "deployment": "cloud-api",
       "license": "Commercial API (Anthropic / Bedrock / Vertex Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier2", "spec", "review", "architecture"]
+      "recommended_tasks": ["tier2", "spec", "review", "architecture"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["claude-opus-latest", "claude-opus", "claude-opus-5", "claude-opus-4"]
+    },
+    {
+      "id": "anthropic/claude-haiku-5-5",
+      "provider": "anthropic",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Anthropic / Bedrock / Vertex Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "classify", "lookup", "scan"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["claude-haiku-latest", "claude-haiku", "claude-haiku-5"]
     },
     {
       "id": "openai/gpt-5",
@@ -69,7 +94,10 @@
       "license": "Commercial API (OpenAI API Business Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "tier2", "review", "pipeline", "synthesize"]
+      "recommended_tasks": ["tier1", "tier2", "review", "pipeline", "synthesize", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["gpt-5-latest", "gpt-latest", "gpt-5"]
     },
     {
       "id": "openai/gpt-5-codex",
@@ -78,7 +106,34 @@
       "license": "Commercial API (OpenAI API Business Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "tier2", "coding"]
+      "recommended_tasks": ["tier1", "tier2", "coding"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["gpt-5-codex-latest", "codex-latest"]
+    },
+    {
+      "id": "openai/o3",
+      "provider": "openai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (OpenAI API Business Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier2", "spec", "review", "synthesize"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["o3-latest", "o1"]
+    },
+    {
+      "id": "openai/o3-mini",
+      "provider": "openai",
+      "deployment": "cloud-api",
+      "license": "Commercial API (OpenAI API Business Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "coding", "classify"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["o3-mini-latest", "o1-mini"]
     },
     {
       "id": "perplexity/sonar-pro",
@@ -88,7 +143,10 @@
       "commercial_use": true,
       "max_data_tier": "public",
       "recommended_tasks": ["research", "citation-search", "spec"],
-      "notes": "Live web-grounded model; restricted to Public / non-proprietary queries."
+      "notes": "Live web-grounded model; restricted to Public / non-proprietary queries.",
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["sonar-pro-latest"]
     },
     {
       "id": "perplexity/sonar-reasoning-pro",
@@ -98,7 +156,10 @@
       "commercial_use": true,
       "max_data_tier": "public",
       "recommended_tasks": ["research", "reasoning", "synthesize"],
-      "notes": "Live web-grounded CoT model; restricted to Public / non-proprietary queries."
+      "notes": "Live web-grounded CoT model; restricted to Public / non-proprietary queries.",
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["sonar-reasoning-latest"]
     },
     {
       "id": "perplexity/sonar",
@@ -108,7 +169,10 @@
       "commercial_use": true,
       "max_data_tier": "public",
       "recommended_tasks": ["research", "lookup"],
-      "notes": "Fast web-grounded lookup; restricted to Public queries."
+      "notes": "Fast web-grounded lookup; restricted to Public queries.",
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["sonar-latest"]
     },
     {
       "id": "xai/grok-4",
@@ -117,7 +181,10 @@
       "license": "Commercial API (xAI Enterprise / API Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "tier2", "review", "research", "synthesize"]
+      "recommended_tasks": ["tier1", "tier2", "review", "research", "synthesize"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["grok-latest", "grok-4-latest"]
     },
     {
       "id": "xai/grok-4-fast",
@@ -126,7 +193,10 @@
       "license": "Commercial API (xAI Enterprise / API Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "coding", "classify"]
+      "recommended_tasks": ["tier1", "coding", "classify"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["grok-fast-latest"]
     },
     {
       "id": "xai/grok-3",
@@ -135,7 +205,10 @@
       "license": "Commercial API (xAI Enterprise / API Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier1", "review", "general"]
+      "recommended_tasks": ["tier1", "review", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["grok-3-latest"]
     },
     {
       "id": "mistral/mistral-large-latest",
@@ -144,7 +217,22 @@
       "license": "Commercial API (Mistral AI Commercial Terms)",
       "commercial_use": true,
       "max_data_tier": "internal",
-      "recommended_tasks": ["tier2", "review", "general"]
+      "recommended_tasks": ["tier2", "review", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["mistral-large"]
+    },
+    {
+      "id": "mistral/codestral-latest",
+      "provider": "mistral",
+      "deployment": "cloud-api",
+      "license": "Commercial API (Mistral AI Commercial Terms)",
+      "commercial_use": true,
+      "max_data_tier": "internal",
+      "recommended_tasks": ["tier1", "tier2", "coding"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["codestral"]
     },
     {
       "id": "on_prem/qwen2.5-coder:32b",
@@ -153,7 +241,10 @@
       "license": "Apache-2.0",
       "commercial_use": true,
       "max_data_tier": "restricted",
-      "recommended_tasks": ["tier1", "tier2", "tier3", "coding", "redaction", "rca"]
+      "recommended_tasks": ["tier1", "tier2", "tier3", "coding", "redaction", "rca"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["qwen-coder-32b"]
     },
     {
       "id": "on_prem/qwen2.5:32b",
@@ -162,7 +253,10 @@
       "license": "Apache-2.0",
       "commercial_use": true,
       "max_data_tier": "restricted",
-      "recommended_tasks": ["tier1", "tier2", "tier3", "research", "general"]
+      "recommended_tasks": ["tier1", "tier2", "tier3", "research", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["qwen-32b"]
     },
     {
       "id": "on_prem/qwen2.5:7b",
@@ -171,7 +265,10 @@
       "license": "Apache-2.0",
       "commercial_use": true,
       "max_data_tier": "restricted",
-      "recommended_tasks": ["tier1", "tier2", "tier3", "classify"]
+      "recommended_tasks": ["tier1", "tier2", "tier3", "classify"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["qwen-7b"]
     },
     {
       "id": "on_prem/mistral-nemo:12b",
@@ -180,7 +277,10 @@
       "license": "Apache-2.0",
       "commercial_use": true,
       "max_data_tier": "restricted",
-      "recommended_tasks": ["tier1", "tier2", "tier3", "general"]
+      "recommended_tasks": ["tier1", "tier2", "tier3", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["mistral-nemo"]
     },
     {
       "id": "on_prem/llama-3.3-70b-instruct",
@@ -189,7 +289,10 @@
       "license": "Meta Llama 3.3 Community License (<700M MAU, Built with Meta Llama 3 attribution)",
       "commercial_use": true,
       "max_data_tier": "restricted",
-      "recommended_tasks": ["tier1", "tier2", "tier3", "review", "general"]
+      "recommended_tasks": ["tier1", "tier2", "tier3", "review", "general"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["llama-3.3-70b", "llama-70b"]
     },
     {
       "id": "on_prem/nomic-embed-text",
@@ -198,7 +301,10 @@
       "license": "Apache-2.0",
       "commercial_use": true,
       "max_data_tier": "restricted",
-      "recommended_tasks": ["embedding", "vmf-search", "rca-dedup"]
+      "recommended_tasks": ["embedding", "vmf-search", "rca-dedup"],
+      "last_verified": "2026-11-21",
+      "deprecation": null,
+      "aliases": ["nomic-embed"]
     }
   ],
   "security_controls": {
