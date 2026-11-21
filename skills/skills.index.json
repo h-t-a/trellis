@@ -1,0 +1,241 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": "1.0.0",
+  "description": "Trellis skill index and deterministic routing manifest",
+  "skills": [
+    {
+      "id": "pb-data-classification",
+      "pack": "core",
+      "triggers": ["data classification", "classify data", "scan pii", "pan scan", "jwt scan", "confidential tier"],
+      "not_for": ["threat modeling", "network review", "performance test"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["data-classification", "security-baseline", "ai-boundary"],
+      "budget": {
+        "max_files": 2,
+        "max_tool_calls": 4
+      }
+    },
+    {
+      "id": "pb-doc",
+      "pack": "core",
+      "triggers": ["doc audit", "diataxis", "adr", "architecture decision record", "c4 diagram", "arc42", "scaffold documentation"],
+      "not_for": ["unit test", "code implementation", "bug triage"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["documentation-standard", "definition-of-done", "security-baseline"],
+      "budget": {
+        "max_files": 4,
+        "max_tool_calls": 6
+      }
+    },
+    {
+      "id": "pb-enhance",
+      "pack": "core",
+      "triggers": ["enhance", "complexity", "big-o", "time space complexity", "io round-trips", "optimize performance"],
+      "not_for": ["bug fixing", "documentation", "load test", "unit test"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["complexity-and-performance", "performance-sla", "testing-standard"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-git-convention",
+      "pack": "core",
+      "triggers": ["git convention", "commit convention", "conventional commits", "branch name", "pre-push check"],
+      "not_for": ["code review", "refactoring", "spec writing"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["git-convention", "security-baseline"],
+      "budget": {
+        "max_files": 2,
+        "max_tool_calls": 4
+      }
+    },
+    {
+      "id": "pb-handoff",
+      "pack": "core",
+      "triggers": ["handoff", "session summary", "compact context", "save state", "session handoff"],
+      "not_for": ["architecture documentation", "spec", "review"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["quota-efficiency"],
+      "budget": {
+        "max_files": 2,
+        "max_tool_calls": 3
+      }
+    },
+    {
+      "id": "pb-knowledge",
+      "pack": "core",
+      "triggers": ["knowledge search", "vmf search", "semantic standard search", "prior rca search"],
+      "not_for": ["web search", "google search", "external api"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["documentation-standard", "quota-efficiency", "security-baseline"],
+      "budget": {
+        "max_files": 3,
+        "max_tool_calls": 5
+      }
+    },
+    {
+      "id": "pb-mcp-audit",
+      "pack": "core",
+      "triggers": ["mcp audit", "audit mcp servers", "mcp provenance", "tool budget telemetry"],
+      "not_for": ["code review", "dependency audit", "unit test"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["security-baseline", "quota-efficiency"],
+      "budget": {
+        "max_files": 3,
+        "max_tool_calls": 5
+      }
+    },
+    {
+      "id": "pb-perf-test",
+      "pack": "core",
+      "triggers": ["perf test", "performance test", "littles law", "load test", "latency sla", "throughput test"],
+      "not_for": ["unit test", "functional test", "bug triage"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["performance-sla", "complexity-and-performance"],
+      "budget": {
+        "max_files": 4,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-pipeline",
+      "pack": "core",
+      "triggers": ["pipeline", "orchestrate stages", "stage machine", "stage transition", "workflow governance"],
+      "not_for": ["single file edit", "quick bug fix", "unit test"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["ai-boundary", "definition-of-done", "security-baseline"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 10
+      }
+    },
+    {
+      "id": "pb-plan",
+      "pack": "core",
+      "triggers": ["plan", "implementation plan", "scope", "estimate cost", "tier 2 approval", "task risk"],
+      "not_for": ["root cause", "debug", "test writing", "pr review"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["definition-of-done", "ai-boundary", "quota-efficiency", "testing-standard"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-rca",
+      "pack": "core",
+      "triggers": ["root cause", "rca", "debug", "exception", "failing test", "latency regression", "deadlock"],
+      "not_for": ["new feature", "spec", "plan"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["rca-playbook", "testing-standard", "ai-boundary"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-release-check",
+      "pack": "core",
+      "triggers": ["release check", "release readiness", "deployment verification", "rollback plan"],
+      "not_for": ["pr review", "commit review", "unit test"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["definition-of-done", "performance-sla", "security-baseline", "ai-boundary"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-review",
+      "pack": "core",
+      "triggers": ["review", "code review", "pre-pr", "pull request review", "definition of done", "dod check"],
+      "not_for": ["initial plan", "spec", "bug triage"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["definition-of-done", "testing-standard", "security-baseline", "ai-boundary", "git-convention"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-route",
+      "pack": "core",
+      "triggers": ["route model", "model selection", "on-prem model", "commercial model routing", "litellm config"],
+      "not_for": ["network routing", "code routing"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["ai-boundary", "data-classification"],
+      "budget": {
+        "max_files": 2,
+        "max_tool_calls": 4
+      }
+    },
+    {
+      "id": "pb-security-audit",
+      "pack": "core",
+      "triggers": ["security audit", "security baseline check", "ai boundary audit", "credential scan", "vulnerability scan"],
+      "not_for": ["functional test", "unit test", "perf test"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["security-baseline", "ai-boundary"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-spec",
+      "pack": "core",
+      "triggers": ["spec", "specification", "micro-spec", "traceable specification", "requirements"],
+      "not_for": ["plan", "bug fixing", "test execution"],
+      "tier": 2,
+      "quota_class": "M",
+      "standards": ["definition-of-done", "documentation-standard", "quota-efficiency", "ai-boundary"],
+      "budget": {
+        "max_files": 5,
+        "max_tool_calls": 8
+      }
+    },
+    {
+      "id": "pb-synthesize",
+      "pack": "core",
+      "triggers": ["synthesize", "cross-model consensus", "model divergence", "agreement matrix"],
+      "not_for": ["single model generation", "code review"],
+      "tier": 1,
+      "quota_class": "S",
+      "standards": ["ai-boundary", "definition-of-done"],
+      "budget": {
+        "max_files": 3,
+        "max_tool_calls": 5
+      }
+    },
+    {
+      "id": "pb-test-writer",
+      "pack": "core",
+      "triggers": ["test writer", "write failing tests", "req test", "test driven", "tdd", "test verification"],
+      "not_for": ["bug fixing", "production code", "plan"],
+      "tier": 1,
+      "quota_class": "M",
+      "standards": ["testing-standard", "ai-boundary"],
+      "budget": {
+        "max_files": 4,
+        "max_tool_calls": 6
+      }
+    }
+  ]
+}

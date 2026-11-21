@@ -95,6 +95,7 @@ class TestTrellisMCPServer(unittest.TestCase):
             "trellis_route_model",
             "trellis_pipeline",
             "trellis_synthesize",
+            "trellis_skill_route",
         }
         self.assertEqual(tool_names, expected_tools)
 

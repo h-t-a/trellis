@@ -1,6 +1,7 @@
 ---
 name: pb-spec
-description: Write or validate a requirement-traceable specification (Class M 4-section Micro-Spec or Class L 10-section Spec). Invoke as /pb-spec before implementing features or enhancements.
+description: Use when authoring Micro-Specs or traceable functional specifications. Not for bug fixing or task planning.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [definition-of-done, documentation-standard, quota-efficiency, ai-boundary]}
 ---
 
 # Skill: `/pb-spec` — Spec-Driven Development Workflow

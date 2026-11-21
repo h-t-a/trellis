@@ -1,6 +1,7 @@
 ---
 name: pb-handoff
-description: Save a compact (under 40 lines) session state handoff summary before starting a new conversation or splitting a Class L epic. Invoke as /pb-handoff.
+description: Use when saving a compact session state summary before context resets. Not for permanent project architecture documentation.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [quota-efficiency]}
 ---
 
 # Skill: `/pb-handoff` — Compact Session State Handoff

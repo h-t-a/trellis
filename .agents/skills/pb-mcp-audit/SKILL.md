@@ -1,6 +1,7 @@
 ---
 name: pb-mcp-audit
-description: Audit .mcp.json servers against approved-mcp-servers.json, verify SHA-256/HMAC standard provenance, and inspect Trellis usage/budget telemetry. Invoke as /pb-mcp-audit.
+description: Use when auditing .mcp.json configurations, server provenance, and tool telemetry. Not for reviewing general application code.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [security-baseline, quota-efficiency]}
 ---
 
 # Skill: `/pb-mcp-audit` — MCP Allowlist, Provenance & Quota Audit

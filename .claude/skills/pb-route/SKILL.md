@@ -1,6 +1,7 @@
 ---
 name: pb-route
-description: Select legally licensed cloud vs strict on-prem open-weight AI models by task type, AI Boundary Tier, and Data Classification, with optional LiteLLM config generation. Invoke as /pb-route.
+description: Use when selecting licensed cloud vs on-prem AI models based on data tier. Not for choosing software runtime dependencies.
+metadata: {pack: core, tier: 1, quota_class: S, standards: [ai-boundary, data-classification]}
 ---
 
 # Skill: `/pb-route` — Policy-Driven Multi-AI Model Router

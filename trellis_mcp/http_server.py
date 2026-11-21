@@ -122,6 +122,7 @@ DEFAULT_MEMBER_SCOPES: tuple[str, ...] = (
     "trellis_route_model",
     "trellis_pipeline",
     "trellis_synthesize",
+    "trellis_skill_route",
 )
 
 

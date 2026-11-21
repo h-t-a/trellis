@@ -1,6 +1,7 @@
 ---
 name: pb-release-check
-description: Verify release readiness against the Release-level Definition of Done, Performance SLA Standard, migration review, and rollback plan. Invoke as /pb-release-check.
+description: Use when verifying release readiness, migrations, and rollback plans. Not for individual commit review or bug triaging.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [definition-of-done, performance-sla, security-baseline, ai-boundary]}
 ---
 
 # Skill: `/pb-release-check` — Release-Level Readiness Gate

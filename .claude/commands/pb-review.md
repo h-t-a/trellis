@@ -1,6 +1,7 @@
 ---
 name: pb-review
-description: Unified Pre-PR & Code Review check against Story Definition of Done, Testing Standard, AI Boundary Tiers 1-3, Security Baseline, Git Convention, and the Review Comment -> Rule loop (replaces standalone code-review). Invoke as /pb-review.
+description: Use when verifying DoD compliance before opening or approving a Pull Request. Not for initial feature design or drafting plans.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [definition-of-done, testing-standard, security-baseline, ai-boundary, git-convention]}
 ---
 
 # Skill: `/pb-review` — Unified Pre-PR & Code Review Gate

@@ -1,6 +1,7 @@
 ---
 name: pb-perf-test
-description: Design, size, and evaluate performance tests using the Performance SLA Standard (Little's Law, percentiles, error rates, and sustained load acceptance). Invoke as /pb-perf-test.
+description: Use when designing load tests and verifying Little's Law throughput and latency SLAs. Not for functional unit test authoring.
+metadata: {pack: core, tier: 2, quota_class: M, standards: [performance-sla, complexity-and-performance]}
 ---
 
 # Skill: `/pb-perf-test` — Performance Test & SLA Design

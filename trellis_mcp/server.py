@@ -28,6 +28,7 @@ from trellis_mcp.tools import (
     tool_trellis_rca,
     tool_trellis_review,
     tool_trellis_scan,
+    tool_trellis_skill_route,
     tool_trellis_spec,
     tool_trellis_test,
     tool_trellis_verify,
@@ -221,6 +222,7 @@ class TrellisMCPServer:
             "trellis_route_model": tool_trellis_route_model,
             "trellis_pipeline": tool_trellis_pipeline,
             "trellis_synthesize": tool_trellis_synthesize,
+            "trellis_skill_route": tool_trellis_skill_route,
         }
 
     def handle_request(

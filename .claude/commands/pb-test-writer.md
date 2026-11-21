@@ -1,6 +1,7 @@
 ---
 name: pb-test-writer
-description: Write failing [REQ-NNN-XX] tests first, execute full test verification suites, and enforce zero weakened assertions. Invoke as /pb-test-writer.
+description: Use when writing failing REQ-linked tests first and executing test verification. Not for fixing bugs or writing production code.
+metadata: {pack: core, tier: 1, quota_class: M, standards: [testing-standard, ai-boundary]}
 ---
 
 # Skill: `/pb-test-writer` — Requirement-Linked Test Authoring & Verification

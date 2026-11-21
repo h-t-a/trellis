@@ -215,6 +215,12 @@ def list_bundled_skills(workspace_root: Path | None = None) -> dict[str, str]:
     skills: dict[str, str] = {}
     for base in (workspace_root, PACKAGE_ROOT):
         if base is not None and base.is_dir():
+            canonical_dir = base / "skills"
+            if canonical_dir.is_dir():
+                for skill_md in sorted(canonical_dir.glob("*/*/SKILL.md")):
+                    skills[skill_md.parent.name] = skill_md.read_text(encoding="utf-8")
+                if skills:
+                    return skills
             skills_dir = base / ".agents" / "skills"
             if skills_dir.is_dir():
                 for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
@@ -225,7 +231,9 @@ def list_bundled_skills(workspace_root: Path | None = None) -> dict[str, str]:
             with zipfile.ZipFile(base, "r") as zf:
                 for entry_name in sorted(zf.namelist()):
                     parts = entry_name.split("/")
-                    if len(parts) == 4 and parts[0] == ".agents" and parts[1] == "skills" and parts[3] == "SKILL.md":
+                    if len(parts) == 4 and parts[0] == "skills" and parts[3] == "SKILL.md":
+                        skills[parts[2]] = zf.read(entry_name).decode("utf-8")
+                    elif len(parts) == 4 and parts[0] == ".agents" and parts[1] == "skills" and parts[3] == "SKILL.md":
                         skills[parts[2]] = zf.read(entry_name).decode("utf-8")
             if skills:
                 return skills
@@ -1156,8 +1164,8 @@ def tool_trellis_doctor(
                 findings.append(
                     f"Deprecated workflow file `{norm}` — migrate to `.agents/skills/<name>/SKILL.md` (`F01`)"
                 )
-            if norm.endswith("SKILL.md") and len(content.splitlines()) >= 80:
-                findings.append(f"Skill `{norm}` exceeds <80 line budget")
+            if norm.endswith("SKILL.md") and len(content.splitlines()) > 40:
+                findings.append(f"Skill `{norm}` exceeds <=40 line budget")
             if norm.endswith(("CLAUDE.md", "GEMINI.md")) and len(content.splitlines()) >= 200:
                 findings.append(f"`{norm}` exceeds <200 line budget")
 
@@ -1240,15 +1248,76 @@ def tool_trellis_doctor(
                     lf.unlink()
                 fixes_applied.append(f"Fixed: Removed {len(legacy_files)} deprecated `.agents/workflows/*.md` file(s)")
 
-    # 3. Check .agents/skills/*/SKILL.md line budget (<80 lines) and frontmatter
-    skills_dir = root / ".agents" / "skills"
-    if skills_dir.exists():
-        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
-            lines = skill_md.read_text(encoding="utf-8").splitlines()
-            if len(lines) >= 80:
-                findings.append(
-                    f"Skill `{skill_md.parent.name}/SKILL.md` is {len(lines)} lines (exceeds <80 line budget)"
-                )
+    # 3. Check SKILL.md line budget (<=40 lines), frontmatter metadata, and standards links ([REQ-TRL-32])
+    skill_candidates: list[Path] = []
+    canonical_skills = root / "skills"
+    if canonical_skills.is_dir():
+        skill_candidates.extend(canonical_skills.glob("*/*/SKILL.md"))
+    agents_skills = root / ".agents" / "skills"
+    if agents_skills.is_dir():
+        for sk_file in agents_skills.glob("*/SKILL.md"):
+            if sk_file not in skill_candidates:
+                skill_candidates.append(sk_file)
+
+    for skill_md in sorted(set(skill_candidates)):
+        rel = skill_md.relative_to(root).as_posix()
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        lines = content.splitlines()
+        if len(lines) > 40:
+            findings.append(
+                f"Skill `{rel}` is {len(lines)} lines (exceeds <=40 line budget)"
+            )
+        # Check frontmatter
+        if not (content.startswith("---\n") and "\n---\n" in content[4:]):
+            findings.append(f"Skill `{rel}` missing YAML frontmatter (`---`)")
+            continue
+        fm_part = content[4:content.find("\n---\n", 4)]
+        if "\nname:" not in ("\n" + fm_part):
+            findings.append(f"Skill `{rel}` missing `name` in frontmatter")
+        if "\ndescription:" not in ("\n" + fm_part):
+            findings.append(f"Skill `{rel}` missing `description` in frontmatter")
+        else:
+            desc_match = re.search(r"^description:\s*(.*?)$", fm_part, re.MULTILINE)
+            if desc_match:
+                desc = desc_match.group(1).strip()
+                if len(desc) > 180:
+                    findings.append(f"Skill `{rel}` description exceeds 180 chars ({len(desc)} chars)")
+                if "Use when" not in desc or "Not for" not in desc:
+                    findings.append(f"Skill `{rel}` description must include both 'Use when' and 'Not for' phrases")
+        if "\nmetadata:" not in ("\n" + fm_part):
+            findings.append(f"Skill `{rel}` missing `metadata` block in frontmatter")
+        else:
+            meta_match = re.search(r"^metadata:\s*\{([^}]+)\}", fm_part, re.MULTILINE)
+            if meta_match:
+                m_body = meta_match.group(1)
+                stds_match = re.search(r"standards:\s*\[([^\]]*)\]", m_body)
+                if stds_match:
+                    raw_stds = [s.strip().strip("'\"") for s in stds_match.group(1).split(",") if s.strip()]
+                    for std in raw_stds:
+                        std_path = root / "docs" / "standards" / f"{std}.md"
+                        if not std_path.is_file():
+                            findings.append(f"Skill `{rel}` references non-existent standard `{std}` (missing docs/standards/{std}.md)")
+
+    # 3b. Validate skills/skills.index.json manifest ([REQ-TRL-31, REQ-TRL-32])
+    index_path = root / "skills" / "skills.index.json"
+    if index_path.is_file():
+        try:
+            idx_data = json.loads(index_path.read_text(encoding="utf-8"))
+            all_skills = idx_data.get("skills", [])
+            seen_triggers: dict[str, str] = {}
+            for sk in all_skills:
+                sk_id = sk.get("id", "unknown")
+                for tr in sk.get("triggers", []):
+                    clean_tr = tr.strip().lower()
+                    if clean_tr in seen_triggers:
+                        findings.append(f"Duplicate trigger `{clean_tr}` between `{seen_triggers[clean_tr]}` and `{sk_id}`")
+                    else:
+                        seen_triggers[clean_tr] = sk_id
+        except Exception as exc:
+            findings.append(f"Invalid skills index manifest `skills/skills.index.json`: {exc}")
 
     # 4. Check CLAUDE.md and GEMINI.md line budgets (<200 lines)
     for ctx_name in ("CLAUDE.md", "GEMINI.md"):
@@ -1297,9 +1366,21 @@ def tool_trellis_doctor(
         except Exception as exc:
             findings.append(f"Could not audit `docs/standards/ai-bom.json`: {exc}")
 
-    # 6. Check Claude Code skill mirror parity
-    if skills_dir.exists():
-        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+    # 6. Check skill mirror parity (.agents/skills and .claude/skills)
+    if canonical_skills.is_dir():
+        for pack_dir in sorted(canonical_skills.iterdir()):
+            if not pack_dir.is_dir() or pack_dir.name.startswith("."):
+                continue
+            for skill_md in sorted(pack_dir.glob("*/SKILL.md")):
+                name = skill_md.parent.name
+                ag_mirror = root / ".agents" / "skills" / name / "SKILL.md"
+                cl_mirror = root / ".claude" / "skills" / name / "SKILL.md"
+                if not ag_mirror.is_file():
+                    findings.append(f"Skill `{name}` is not mirrored to `.agents/skills/{name}/SKILL.md`")
+                if not cl_mirror.is_file():
+                    findings.append(f"Skill `{name}` is not mirrored to `.claude/skills/{name}/SKILL.md`")
+    elif agents_skills.exists():
+        for skill_md in sorted(agents_skills.glob("*/SKILL.md")):
             name = skill_md.parent.name
             mirror = root / ".claude" / "skills" / name / "SKILL.md"
             if not mirror.is_file():
@@ -1864,6 +1945,113 @@ def tool_trellis_mcp_registry(
     )
 
 
+def tool_trellis_skill_route(
+    args: dict[str, Any], workspace_root: Path | None = None
+) -> dict[str, Any]:
+    """Deterministically route a task description to the optimal Trellis skill, pack, and gate ([REQ-TRL-33])."""
+    task = str(args.get("task", "")).strip().lower()
+    if not task:
+        return _err("`task` argument is required for trellis_skill_route")
+
+    root = _resolve_root(workspace_root)
+    index_path = root / "skills" / "skills.index.json"
+    skills_catalog: list[dict[str, Any]] = []
+
+    if index_path.is_file():
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            skills_catalog = data.get("skills", [])
+        except (OSError, json.JSONDecodeError):
+            skills_catalog = []
+
+    if not skills_catalog:
+        return _err("Skills index not found or empty")
+
+    task_words = set(re.findall(r"\w+", task))
+    scored: list[tuple[float, dict[str, Any]]] = []
+
+    for item in skills_catalog:
+        score = 0.0
+        # Positive trigger matches
+        for trigger in item.get("triggers", []):
+            tr_lower = trigger.lower()
+            if tr_lower in task:
+                score += 5.0
+            else:
+                tr_words = set(re.findall(r"\w+", tr_lower))
+                overlap = len(tr_words & task_words)
+                if overlap > 0:
+                    score += overlap * 1.5
+
+        # Negative not_for discounts
+        for nf in item.get("not_for", []):
+            nf_lower = nf.lower()
+            if nf_lower in task:
+                score -= 6.0
+            else:
+                nf_words = set(re.findall(r"\w+", nf_lower))
+                overlap = len(nf_words & task_words)
+                if overlap > 0:
+                    score -= overlap * 2.0
+
+        if score > 0:
+            scored.append((score, item))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_matches = scored[:2]
+
+    if not top_matches:
+        for item in skills_catalog:
+            if item.get("id") == "pb-plan":
+                top_matches = [(1.0, item)]
+                break
+
+    matched_skills: list[dict[str, Any]] = []
+    top_tier = 1
+    collected_standards: list[str] = []
+
+    for score, item in top_matches:
+        matched_skills.append({
+            "id": item["id"],
+            "pack": item.get("pack", "core"),
+            "tier": item.get("tier", 1),
+            "quota_class": item.get("quota_class", "M"),
+            "why": f"Matched triggers: {', '.join(item.get('triggers', [])[:3])}",
+        })
+        top_tier = max(top_tier, item.get("tier", 1))
+        for std in item.get("standards", []):
+            if std not in collected_standards:
+                collected_standards.append(std)
+
+    if top_tier == 3:
+        gate_note = "Tier 3: Strictly human-authorized only. Zero autonomous action."
+    elif top_tier == 2:
+        gate_note = "Tier 2: AI drafts, human approves. Pause for review."
+    else:
+        gate_note = "Tier 1: Autonomous execution within budget."
+
+    rendered_text = (
+        f"# Trellis Skill Router (`[REQ-TRL-33]`)\n\n"
+        f"- **Task:** `{task}`\n"
+        f"- **Gate:** **{gate_note}**\n\n"
+        f"## Recommended Skills\n"
+        + "\n".join(
+            f"- `{s['id']}` (Pack: `{s['pack']}`, Tier: `{s['tier']}`, Quota: `{s['quota_class']}`): {s['why']}"
+            for s in matched_skills
+        )
+        + f"\n\n## Canonical Standards to Consult\n"
+        + "\n".join(f"- `docs/standards/{std}.md`" for std in collected_standards)
+    )
+
+    res = {
+        "skills": matched_skills,
+        "gate": gate_note,
+        "standards": collected_standards,
+        "content": [{"type": "text", "text": rendered_text}],
+    }
+    return res
+
+
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "trellis_get_standard",
@@ -2165,6 +2353,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
             },
             "required": ["prompt", "responses"],
+        },
+    },
+    {
+        "name": "trellis_skill_route",
+        "description": "Deterministically route a software engineering task or symptom to the optimal Trellis skill card, pack, tier, and execution gate based on skills.index.json.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "Description of the development task, bug symptom, or engineering request."},
+            },
+            "required": ["task"],
         },
     },
 ]
