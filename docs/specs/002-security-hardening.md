@@ -20,7 +20,7 @@
 
 ## 3. OSS Scrubbing, VM Scripts & Hygiene (`[REQ-TRL-24]` .. `[REQ-TRL-25]`)
 - `[REQ-TRL-24]` VM setup scripts remove SYSTEM scheduled task execution, WinRM `Any` IP listeners, automatic process killing on port 8080, and hardcoded local directories (`F5`).
-- `[REQ-TRL-25]` Scrubbed all tracked files of personal directory paths (`d:\hta`), internal VPN IPs (`10.6.7.1`), and internal project labels; added `SECURITY.md` with GitHub Private Vulnerability Reporting (`F13`, `F17`).
+- `[REQ-TRL-25]` Scrubbed all tracked files of personal local workstation directories, private VPN IP addresses, and internal project names; added `SECURITY.md` with GitHub Private Vulnerability Reporting (`F13`, `F17`).
 
 ## 4. CI Workflow & Claude Hooks (`[REQ-TRL-26]` .. `[REQ-TRL-27]`)
 - `[REQ-TRL-26]` Claude Code hooks run real requirement-linked test discovery, catch destructive variations (`rm -rf ~`, `rm -rf .`, `git push -f`), and state defense-in-depth posture (`F12`).

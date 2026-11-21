@@ -100,7 +100,7 @@ flowchart TD
 - **Threat:** Leaking customer PII/PAN, API tokens, internal server directory paths, or private VPN addresses in error messages, logs, or public git repos (`F13`).
 - **Mitigations:**
   - Luhn PAN, JWT, Myanmar NRC, IBAN, and secret regex redactions applied automatically across prompts and logs (`[REQ-TRL-05]`).
-  - Scrubbed personal local directories (`d:\hta`), private VPN IPs (`10.6.7.1`), and company-specific names from tracked files (`[REQ-TRL-25]`).
+  - Scrubbed personal local workstation directories, private VPN IP addresses, and company-specific names from tracked files (`[REQ-TRL-25]`).
   - Public repository includes `SECURITY.md` directing vulnerability reports to GitHub Private Vulnerability Reporting (`[REQ-TRL-25]`).
 
 ### 4.5 Denial of Service (Availability)
