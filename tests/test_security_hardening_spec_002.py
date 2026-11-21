@@ -777,6 +777,93 @@ class TestSpec002SecurityHardening(unittest.TestCase):
         sec_md = (REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")
         self.assertIn("github.com/h-t-a/trellis/security/advisories", sec_md)
 
+    def test_req_trl_26_claude_hooks_are_real_and_block_destructive_variants(self) -> None:
+        """[REQ-TRL-26] Wired Claude hooks run real tests, catch rm -rf ~/./-fr variants, and have accurate docs."""
+        import shutil
+        import subprocess
+
+        run_tests = (REPO_ROOT / ".claude" / "hooks" / "run-tests.sh").read_text(encoding="utf-8")
+        validate_bash = (REPO_ROOT / ".claude" / "hooks" / "validate-bash.sh").read_text(encoding="utf-8")
+        secret_scan = (REPO_ROOT / ".claude" / "hooks" / "secret-scan.sh").read_text(encoding="utf-8")
+        settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("Starter kit placeholder", run_tests)
+        self.assertIn("unittest discover", run_tests)
+        for text in (run_tests, validate_bash, secret_scan):
+            self.assertNotIn("Do NOT wire", text)
+        self.assertIn("defense-in-depth", str(settings.get("_comment", "")).lower())
+
+        # If bash is installed locally, exercise validate-bash.sh directly against destructive variants
+        bash_exe = shutil.which("bash")
+        if bash_exe:
+            hook_path = str(REPO_ROOT / ".claude" / "hooks" / "validate-bash.sh")
+            for blocked_cmd in (
+                "rm -rf /",
+                "rm -rf ~",
+                "rm -rf .",
+                "rm -fr ./src",
+                "rm --recursive --force /tmp/x",
+                "git push --force origin master",
+                "git push -f origin master",
+            ):
+                proc = subprocess.run(
+                    [bash_exe, hook_path],
+                    input=blocked_cmd,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 2, f"Expected exit 2 for: {blocked_cmd}")
+
+            ok_proc = subprocess.run(
+                [bash_exe, hook_path],
+                input="python -m unittest discover -s tests -v",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(ok_proc.returncode, 0)
+
+    def test_req_trl_27_github_actions_ci_workflow_present(self) -> None:
+        """[REQ-TRL-27] GitHub Actions CI covers Python 3.9-3.13, tests, doctor, skill parity, scan, lint, and .pyz build."""
+        ci_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+        self.assertTrue(ci_path.is_file(), "Missing .github/workflows/ci.yml")
+        ci_text = ci_path.read_text(encoding="utf-8")
+
+        for expected in (
+            '"3.9"',
+            '"3.10"',
+            '"3.11"',
+            '"3.12"',
+            '"3.13"',
+            "ubuntu-24.04",
+            "windows-latest",
+            "unittest discover -s tests",
+            "trellis_mcp --check",
+            "--sync-workspace",
+            "git diff --exit-code",
+            "tool_trellis_scan",
+            "--build-pyz",
+            "ruff",
+        ):
+            self.assertIn(expected, ci_text, f"CI workflow missing required check: {expected}")
+
+        # Also verify _merge_mcp_config preserves existing python/python3 command
+        from trellis_mcp.installer import _merge_mcp_config
+        with tempfile.TemporaryDirectory() as tmp_mcp:
+            cfg_file = Path(tmp_mcp) / "mcp.json"
+            cfg_file.write_text(json.dumps({"mcpServers": {"trellis-mcp": {"command": "python", "args": []}}}), encoding="utf-8")
+            # Calling with python3 server entry keeps existing "python"
+            _merge_mcp_config(cfg_file, {"command": "python3", "args": ["-m", "trellis_mcp"]})
+            updated = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(updated["mcpServers"]["trellis-mcp"]["command"], "python")
+
+            # Calling with python server entry on existing "python3" keeps "python3"
+            cfg_file.write_text(json.dumps({"mcpServers": {"trellis-mcp": {"command": "python3", "args": []}}}), encoding="utf-8")
+            _merge_mcp_config(cfg_file, {"command": "python", "args": ["-m", "trellis_mcp"]})
+            updated3 = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(updated3["mcpServers"]["trellis-mcp"]["command"], "python3")
+
 
 if __name__ == "__main__":
     unittest.main()

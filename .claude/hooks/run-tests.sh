@@ -3,37 +3,40 @@
 # .claude/hooks/run-tests.sh
 # ==============================================================================
 # Purpose:
-#   Run the project's automated test suite at task completion to enforce
+#   Wired Stop hook in .claude/settings.json ([REQ-TRL-07, REQ-TRL-26]).
+#   Executes the project's automated test suite at task completion to enforce
 #   docs/standards/testing-standard.md and docs/standards/definition-of-done.md.
 #
-# Safety Guarantee (Working Agreement 6):
-#   This script is simple, readable, and never deletes, overwrites, or sends
-#   data anywhere.
-#
-# Intended Wiring in .claude/settings.json [VERIFY hook schema in installed Claude Code version]:
-#   Do NOT wire automatically until approved by the project owner.
-#   Example configuration to verify against your installed Claude Code version:
-#   {
-#     "hooks": {
-#       "Stop": [
-#         {
-#           "hooks": [
-#             {
-#               "type": "command",
-#               "command": "./.claude/hooks/run-tests.sh"
-#             }
-#           ]
-#         }
-#       ]
-#     }
-#   }
+# Safety Guarantee:
+#   Runs read-only test verification without modifying tracked source files.
 # ==============================================================================
 
 set -euo pipefail
 
-# TODO [TO RESEARCH]: Replace the echo below with the project's actual test runner
-# (e.g., `npm test`, `pytest`, `./gradlew test`, or `go test ./...`) when adopting
-# this starter kit in a target repository.
-echo "[run-tests] Starter kit placeholder: configure project test command in .claude/hooks/run-tests.sh (see docs/standards/testing-standard.md)."
+PY_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+  PY_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PY_BIN="python"
+fi
 
+if [ -d "tests" ] && [ -n "${PY_BIN}" ]; then
+  echo "[run-tests] Running Python unittest suite (${PY_BIN} -m unittest discover -s tests)..."
+  "${PY_BIN}" -m unittest discover -s tests
+  exit $?
+fi
+
+if [ -f "package.json" ] && command -v npm >/dev/null 2>&1; then
+  echo "[run-tests] Running npm test..."
+  npm test
+  exit $?
+fi
+
+if [ -f "go.mod" ] && command -v go >/dev/null 2>&1; then
+  echo "[run-tests] Running go test ./..."
+  go test ./...
+  exit $?
+fi
+
+echo "[run-tests] No supported test runner detected in $(pwd); configure .claude/hooks/run-tests.sh for this repository." >&2
 exit 0
