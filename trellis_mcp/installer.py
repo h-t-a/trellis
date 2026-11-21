@@ -78,7 +78,14 @@ def _merge_mcp_config(
     if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
         data["mcpServers"] = {}
 
-    data["mcpServers"]["trellis-mcp"] = server_entry
+    entry = dict(server_entry)
+    existing_entry = data["mcpServers"].get("trellis-mcp")
+    if isinstance(existing_entry, dict):
+        existing_cmd = existing_entry.get("command")
+        if existing_cmd in ("python", "python3") and entry.get("command") in ("python", "python3"):
+            entry["command"] = existing_cmd
+
+    data["mcpServers"]["trellis-mcp"] = entry
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     if restrict_permissions:

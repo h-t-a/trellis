@@ -836,7 +836,7 @@ class TestSpec002SecurityHardening(unittest.TestCase):
             '"3.11"',
             '"3.12"',
             '"3.13"',
-            "ubuntu-latest",
+            "ubuntu-24.04",
             "windows-latest",
             "unittest discover -s tests",
             "trellis_mcp --check",
@@ -847,6 +847,22 @@ class TestSpec002SecurityHardening(unittest.TestCase):
             "ruff",
         ):
             self.assertIn(expected, ci_text, f"CI workflow missing required check: {expected}")
+
+        # Also verify _merge_mcp_config preserves existing python/python3 command
+        from trellis_mcp.installer import _merge_mcp_config
+        with tempfile.TemporaryDirectory() as tmp_mcp:
+            cfg_file = Path(tmp_mcp) / "mcp.json"
+            cfg_file.write_text(json.dumps({"mcpServers": {"trellis-mcp": {"command": "python", "args": []}}}), encoding="utf-8")
+            # Calling with python3 server entry keeps existing "python"
+            _merge_mcp_config(cfg_file, {"command": "python3", "args": ["-m", "trellis_mcp"]})
+            updated = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(updated["mcpServers"]["trellis-mcp"]["command"], "python")
+
+            # Calling with python server entry on existing "python3" keeps "python3"
+            cfg_file.write_text(json.dumps({"mcpServers": {"trellis-mcp": {"command": "python3", "args": []}}}), encoding="utf-8")
+            _merge_mcp_config(cfg_file, {"command": "python", "args": ["-m", "trellis_mcp"]})
+            updated3 = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(updated3["mcpServers"]["trellis-mcp"]["command"], "python3")
 
 
 if __name__ == "__main__":
