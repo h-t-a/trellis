@@ -146,6 +146,55 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
+def _is_within_root(
+    root: Path, candidate: Path, *, allow_target_symlink: bool = False
+) -> bool:
+    """Return True iff `candidate` resolves strictly inside `root` without sibling or symlink escape ([REQ-TRL-19])."""
+    try:
+        resolved_root = root.resolve()
+        resolved_candidate = candidate.resolve()
+        resolved_candidate.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return False
+
+    if not allow_target_symlink:
+        try:
+            if candidate.is_symlink():
+                return False
+        except OSError:
+            return False
+
+    try:
+        rel_parts = candidate.relative_to(root).parts
+    except ValueError:
+        try:
+            rel_parts = candidate.relative_to(resolved_root).parts
+        except ValueError:
+            rel_parts = ()
+
+    probe = resolved_root
+    for part in rel_parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            probe = probe.parent
+            try:
+                probe.resolve().relative_to(resolved_root)
+            except (OSError, ValueError):
+                return False
+            continue
+        probe = probe / part
+        try:
+            if probe.is_symlink():
+                probe.resolve().relative_to(resolved_root)
+                if not allow_target_symlink:
+                    return False
+        except (OSError, ValueError):
+            return False
+
+    return True
+
+
 def read_bundled_text(rel_path: str, workspace_root: Path | None = None) -> str | None:
     """Read a bundled markdown/resource file from disk or from a standalone .pyz zip archive ([REQ-MCP-09])."""
     norm_rel = rel_path.replace("\\", "/").lstrip("/")
@@ -263,6 +312,8 @@ def _load_standard(
     root: Path,
     version: str | None = None,
     offline: bool = False,
+    *,
+    write_cache: bool = True,
 ) -> dict[str, Any]:
     """Resolve a standard by name/version, preferring disk/bundle then the offline cache."""
     manifest = _standard_manifest(root)
@@ -285,7 +336,12 @@ def _load_standard(
             f"Version '{resolved_version}' not available for '{name}'. Available: {available}"
         )
 
-    cache_path = _standard_cache_dir(root) / f"{name}@{resolved_version}.md"
+    cache_dir = _standard_cache_dir(root)
+    cache_path = cache_dir / f"{name}@{resolved_version}.md"
+    if not _is_within_root(cache_dir, cache_path):
+        raise ValueError("Invalid standard name or version path.")
+    if root.is_dir() and not _is_within_root(root, root / str(rel_path)):
+        raise ValueError(f"Standard path escapes workspace root: {rel_path}")
     content: str | None = None
     source = "bundled"
 
@@ -320,7 +376,7 @@ def _load_standard(
             raise ValueError(
                 f"Offline cache integrity check failed for '{name}' version '{resolved_version}'."
             )
-    if not offline:
+    if write_cache and not offline:
         _write_standard_cache(cache_path, content, digest)
 
     return {
@@ -381,8 +437,15 @@ def tool_trellis_get_standard(
             f"Unknown standard '{name}'. Available: {', '.join(sorted(manifest.keys()))}"
         )
 
+    remote_mode = bool(args.get("_remote_mode", False))
     try:
-        loaded = _load_standard(name, root, version=str(version) if version else None, offline=offline)
+        loaded = _load_standard(
+            name,
+            root,
+            version=str(version) if version else None,
+            offline=offline,
+            write_cache=not remote_mode,
+        )
     except (KeyError, ValueError, FileNotFoundError) as exc:
         return _err(str(exc))
 
@@ -402,8 +465,14 @@ def tool_trellis_verify(
     version = args.get("version")
     signing_key = args.get("signing_key")
 
+    remote_mode = bool(args.get("_remote_mode", False))
     try:
-        loaded = _load_standard(name, root, version=str(version) if version else None)
+        loaded = _load_standard(
+            name,
+            root,
+            version=str(version) if version else None,
+            write_cache=not remote_mode,
+        )
     except (KeyError, ValueError, FileNotFoundError) as exc:
         return _err(str(exc))
 
@@ -466,7 +535,13 @@ def tool_trellis_analytics(
     root = _resolve_root(workspace_root)
     base = root.parent if root.is_file() else root
     usage_arg = args.get("usage_file")
-    usage_path = (base / str(usage_arg)).resolve() if usage_arg else base / ".trellis_usage.json"
+    if usage_arg:
+        usage_candidate = base / str(usage_arg)
+        if not _is_within_root(base, usage_candidate):
+            return _err("`usage_file` must stay within the workspace root ([REQ-TRL-19]).")
+        usage_path = usage_candidate.resolve()
+    else:
+        usage_path = base / ".trellis_usage.json"
     budget = int(args.get("budget_tokens") or 0)
     rate = float(args.get("cost_per_1k_tokens") or 0.0)
     period_days = args.get("period_days")
@@ -909,9 +984,14 @@ def tool_trellis_handoff(
 - **Immediate Next Step:** {next_step or "Run targeted verification"}
 - **Resume Prompt:** Read only the files listed above and execute the Immediate Next Step.
 """
-    if save_to_file and workspace_root:
-        out_path = (workspace_root / str(save_to_file)).resolve()
-        if str(out_path).startswith(str(workspace_root.resolve())):
+    if save_to_file:
+        if bool(args.get("_remote_mode", False)):
+            return _err("`save_to_file` is disabled in remote HTTP mode ([REQ-TRL-17]).")
+        if workspace_root:
+            candidate = workspace_root / str(save_to_file)
+            if not _is_within_root(workspace_root, candidate, allow_target_symlink=False):
+                return _err("`save_to_file` must stay within the workspace root ([REQ-TRL-19]).")
+            out_path = candidate.resolve()
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(packet, encoding="utf-8")
 
@@ -1099,8 +1179,23 @@ def tool_trellis_doctor(
 {extra_section}"""
         )
 
+    remote_mode = bool(args.get("_remote_mode", False))
     raw_path = args.get("workspace_path")
-    root = Path(str(raw_path)).resolve() if raw_path else _resolve_root(workspace_root)
+    if remote_mode:
+        if auto_fix:
+            return _err("`auto_fix` is disabled in remote HTTP mode ([REQ-TRL-17]).")
+        base_root = _resolve_root(workspace_root)
+        if raw_path:
+            candidate = base_root / str(raw_path)
+            if not _is_within_root(base_root, candidate):
+                return _err(
+                    "`workspace_path` must stay within the server workspace root in remote mode ([REQ-TRL-17, REQ-TRL-19])."
+                )
+            root = candidate.resolve()
+        else:
+            root = base_root
+    else:
+        root = Path(str(raw_path)).resolve() if raw_path else _resolve_root(workspace_root)
 
     # 1. Check .agents/rules/*.md for YAML frontmatter (F02)
     rules_dir = root / ".agents" / "rules"
@@ -1449,7 +1544,7 @@ def _iter_workspace_text_files(
     excludes = [e.strip().strip("/") for e in (exclude or []) if e.strip()]
     files: list[tuple[str, str]] = []
     for path in sorted(root.rglob("*")):
-        if not path.is_file():
+        if not path.is_file() or path.is_symlink() or not _is_within_root(root, path):
             continue
         rel = path.relative_to(root).as_posix()
         if any(rel == ex or rel.startswith(ex + "/") for ex in excludes):
@@ -1476,9 +1571,10 @@ def tool_trellis_scan(
     """Run secret scanning and optional dependency vulnerability scanning ([REQ-P2-02])."""
     root = _workspace_root(workspace_root)
     rel_path = str(args.get("path", ".") or ".").strip()
-    target = (root / rel_path).resolve()
-    if not str(target).startswith(str(root)):
-        return _err("`path` must stay within the workspace root.")
+    candidate = root / rel_path
+    if not _is_within_root(root, candidate):
+        return _err("`path` must stay within the workspace root ([REQ-TRL-19]).")
+    target = candidate.resolve()
     if not target.exists():
         return _err(f"Scan path does not exist: {rel_path}")
 
@@ -1672,8 +1768,11 @@ def tool_trellis_mcp_registry(
     findings: list[str] = []
     checked: list[str] = []
     for rel in config_paths:
-        cfg_path = (root / str(rel)).resolve()
-        if not str(cfg_path).startswith(str(root)) or not cfg_path.is_file():
+        candidate = root / str(rel)
+        if not _is_within_root(root, candidate):
+            return _err("`config_paths` entries must stay within the workspace root ([REQ-TRL-19]).")
+        cfg_path = candidate.resolve()
+        if not cfg_path.is_file():
             continue
         checked.append(str(rel))
         try:
