@@ -228,6 +228,7 @@ class TrellisMCPServer:
         message: dict[str, Any],
         *,
         caller_label: str | None = None,
+        caller_role: str | None = None,
         remote_mode: bool = False,
     ) -> dict[str, Any] | None:
         """Process a single JSON-RPC 2.0 request or notification."""
@@ -269,14 +270,21 @@ class TrellisMCPServer:
 
             if method == "tools/call":
                 tool_name = str(params.get("name", ""))
-                tool_args = dict(params.get("arguments") or {})
+                raw_args = params.get("arguments") or {}
+                tool_args = {
+                    k: v
+                    for k, v in dict(raw_args).items()
+                    if not str(k).startswith("_")
+                }
                 handler = self._tool_dispatch.get(tool_name)
                 if not handler:
                     return self._error(msg_id, -32601, f"Unknown tool: {tool_name}")
                 if remote_mode:
-                    tool_args.setdefault("_remote_mode", True)
+                    tool_args["_remote_mode"] = True
                 if caller_label:
-                    tool_args.setdefault("_auth_label", caller_label)
+                    tool_args["_auth_label"] = caller_label
+                if caller_role:
+                    tool_args["_auth_role"] = caller_role
                 result = handler(tool_args, self.workspace_root)
                 return self._response(msg_id, result)
 

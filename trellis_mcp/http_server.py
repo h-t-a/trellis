@@ -68,6 +68,24 @@ _SESSION_VERSION = "v1"
 _SESSION_COOKIE_SECURE = "__Host-trellis_admin"
 _SESSION_COOKIE_DEV = "trellis_admin_session"
 
+# Default read-only tool allowlist for `member` API keys ([REQ-TRL-18]).
+# Excludes write-capable and server-filesystem-scanning tools (handoff, doctor, scan, mcp_registry, analytics).
+DEFAULT_MEMBER_SCOPES: tuple[str, ...] = (
+    "trellis_get_standard",
+    "trellis_rca",
+    "trellis_spec",
+    "trellis_enhance",
+    "trellis_budget",
+    "trellis_review",
+    "trellis_test",
+    "trellis_classify",
+    "trellis_verify",
+    "trellis_search_knowledge",
+    "trellis_route_model",
+    "trellis_pipeline",
+    "trellis_synthesize",
+)
+
 
 def compute_hmac_signature(payload: bytes, key: str) -> str:
     """Return a hex HMAC-SHA256 signature of `payload` using `key`."""
@@ -225,7 +243,15 @@ class TrellisKeyStore:
         )
         salt = secrets.token_hex(16)
         prefix = f"{raw_key[:14]}...{raw_key[-4:]}"
-        norm_scopes = [str(s).strip() for s in scopes if str(s).strip()] if scopes else None
+        if scopes is not None:
+            cleaned_scopes = [str(s).strip() for s in scopes if str(s).strip()]
+            norm_scopes: list[str] | None = (
+                cleaned_scopes if cleaned_scopes else (list(DEFAULT_MEMBER_SCOPES) if norm_role == "member" else None)
+            )
+        elif norm_role == "member":
+            norm_scopes = list(DEFAULT_MEMBER_SCOPES)
+        else:
+            norm_scopes = None
 
         record = {
             "key_id": key_id,
@@ -276,6 +302,8 @@ class TrellisKeyStore:
                     rec["label"] = new_label
                 if norm_role is not None:
                     rec["role"] = norm_role
+                    if norm_role == "member" and not rec.get("scopes"):
+                        rec["scopes"] = list(DEFAULT_MEMBER_SCOPES)
                 self._save_records(records)
                 return self._sanitize_record(rec)
         return None
@@ -351,12 +379,16 @@ class TrellisKeyStore:
         return matched
 
     def get_scopes(self, key_id: str) -> list[str] | None:
-        """Return allowed tool scopes for `key_id`, or None if unrestricted ([REQ-TRL-03])."""
+        """Return allowed tool scopes for `key_id`, defaulting member keys to read-only ([REQ-TRL-03, REQ-TRL-18])."""
         with self._lock:
             for rec in self._load_records_cached():
                 if rec.get("key_id") == key_id:
                     scopes = rec.get("scopes")
-                    return list(scopes) if isinstance(scopes, list) and scopes else None
+                    if isinstance(scopes, list) and scopes:
+                        return list(scopes)
+                    if str(rec.get("role", "member")).lower() == "member":
+                        return list(DEFAULT_MEMBER_SCOPES)
+                    return None
         return None
 
     def verify_token(self, candidate: str | None) -> str | None:
@@ -1491,7 +1523,10 @@ class TrellisHTTPServer:
                     if isinstance(item, dict)
                     and (
                         resp := self.mcp_server.handle_request(
-                            item, caller_label=caller_label, remote_mode=True
+                            item,
+                            caller_label=caller_label,
+                            caller_role=role,
+                            remote_mode=True,
                         )
                     )
                     is not None
@@ -1502,7 +1537,10 @@ class TrellisHTTPServer:
                 return err
 
             response = self.mcp_server.handle_request(
-                payload, caller_label=caller_label, remote_mode=True
+                payload,
+                caller_label=caller_label,
+                caller_role=role,
+                remote_mode=True,
             )
             if response is None:
                 return 202, {"Content-Length": "0"}, b""
