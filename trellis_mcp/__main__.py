@@ -122,6 +122,50 @@ def main(argv: list[str] | None = None) -> int:
         help="Allowed browser Origin for /mcp and /admin/* (repeatable) ([REQ-TRL-01]).",
     )
     parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=None,
+        help="Allowed HTTP Host header value (repeatable, stops DNS rebinding) ([REQ-TRL-21]).",
+    )
+    parser.add_argument(
+        "--public-url",
+        type=str,
+        default=None,
+        help="Canonical public base URL (e.g. https://trellis.example.com) for /install.sh and A2A card ([REQ-TRL-21]).",
+    )
+    parser.add_argument(
+        "--insecure-http",
+        action="store_true",
+        help="Explicitly allow non-loopback plaintext HTTP binding without --tls-cert/--tls-key ([REQ-TRL-21]).",
+    )
+    parser.add_argument(
+        "--enable-remote-deploy",
+        action="store_true",
+        help="Enable POST /admin/deploy (disabled by default; requires --deploy-signing-key) ([REQ-TRL-20]).",
+    )
+    parser.add_argument(
+        "--deploy-signing-key",
+        type=str,
+        default=None,
+        help="Separate HMAC signing key for POST /admin/deploy (or TRELLIS_DEPLOY_SIGNING_KEY) ([REQ-TRL-20]).",
+    )
+    parser.add_argument(
+        "--trust-proxy",
+        action="append",
+        default=None,
+        help="Trusted reverse-proxy IP allowed to set X-Forwarded-For / X-Forwarded-Proto (repeatable) ([REQ-TRL-23]).",
+    )
+    parser.add_argument(
+        "--allow-unsigned",
+        action="store_true",
+        help="Explicitly allow --install-remote without bundle signature verification ([REQ-TRL-22]).",
+    )
+    parser.add_argument(
+        "--migrate-keys",
+        action="store_true",
+        help="Migrate any legacy plaintext keys in .trellis_keys.json to salted SHA-256 hashes ([REQ-TRL-23]).",
+    )
+    parser.add_argument(
         "--audit-log",
         type=Path,
         default=None,
@@ -370,34 +414,51 @@ def main(argv: list[str] | None = None) -> int:
         print(install_global(root))
         return 0
 
+    if args.migrate_keys:
+        store = TrellisKeyStore(resolved_keys_file)
+        migrated = store.migrate_legacy_plaintext_keys()
+        print(json.dumps({"keys_file": str(resolved_keys_file), "migrated_keys": migrated}, indent=2))
+        return 0
+
     if args.install_remote:
         print(
             install_remote(
                 server_url=args.install_remote,
                 api_key=args.api_key,
                 signing_key=args.bundle_signing_key,
+                allow_unsigned=args.allow_unsigned,
             )
         )
         return 0
 
     if args.serve_http:
-        http_srv = TrellisHTTPServer(
-            host=args.host,
-            port=args.port,
-            api_key=args.api_key,
-            workspace_root=root,
-            auto_generate_key=args.auto_generate_key,
-            keys_file=resolved_keys_file,
-            tls_cert=args.tls_cert,
-            tls_key=args.tls_key,
-            bundle_signing_key=args.bundle_signing_key,
-            max_body_bytes=args.max_body_bytes,
-            rate_limit=args.rate_limit,
-            rate_window_sec=args.rate_window_sec,
-            request_timeout_sec=args.request_timeout,
-            allowed_origins=args.allowed_origin,
-            audit_log=args.audit_log,
-        )
+        try:
+            http_srv = TrellisHTTPServer(
+                host=args.host,
+                port=args.port,
+                api_key=args.api_key,
+                workspace_root=root,
+                auto_generate_key=args.auto_generate_key,
+                keys_file=resolved_keys_file,
+                tls_cert=args.tls_cert,
+                tls_key=args.tls_key,
+                bundle_signing_key=args.bundle_signing_key,
+                max_body_bytes=args.max_body_bytes,
+                rate_limit=args.rate_limit,
+                rate_window_sec=args.rate_window_sec,
+                request_timeout_sec=args.request_timeout,
+                allowed_origins=args.allowed_origin,
+                audit_log=args.audit_log,
+                enable_remote_deploy=args.enable_remote_deploy,
+                deploy_signing_key=args.deploy_signing_key,
+                insecure_http=args.insecure_http,
+                public_url=args.public_url,
+                allowed_hosts=args.allowed_host,
+                trusted_proxies=args.trust_proxy,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         http_srv.serve_forever()
         return 0
 

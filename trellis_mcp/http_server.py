@@ -29,9 +29,11 @@ import json
 import os
 import re
 import secrets
+import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -42,6 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import OpenerDirector, ProxyHandler, Request, build_opener
 
 from trellis_mcp import __version__
@@ -61,12 +64,47 @@ DEFAULT_RATE_LIMIT = 120  # requests allowed per client per window
 DEFAULT_RATE_WINDOW_SEC = 60.0
 DEFAULT_REQUEST_TIMEOUT_SEC = 15.0
 DEFAULT_SESSION_TTL_SEC = 900  # 15 minutes
+DEFAULT_MAX_TRACKED_IPS = 2048
 _SIGNATURE_HEADER = "x-trellis-signature"
 _BUNDLE_SIGNATURE_HEADER = "x-trellis-bundle-signature"
 _CSRF_HEADER = "x-trellis-csrf"
 _SESSION_VERSION = "v1"
 _SESSION_COOKIE_SECURE = "__Host-trellis_admin"
 _SESSION_COOKIE_DEV = "trellis_admin_session"
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+_SAFE_URL_RE = re.compile(r"^https?://[A-Za-z0-9._:\-\[\]]+(?:/[A-Za-z0-9._/\-]*)?$")
+_VERSION_ASSIGN_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().lower() in _LOOPBACK_HOSTS
+
+
+def _strip_host_port(host_header: str) -> str:
+    raw = host_header.strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith("["):
+        end = raw.find("]")
+        return raw[: end + 1] if end != -1 else raw
+    return raw.split(":", 1)[0]
+
+
+def _parse_semver(version_str: str) -> tuple[int, ...]:
+    nums = [int(p) for p in re.findall(r"\d+", version_str)]
+    return tuple(nums) if nums else (0, 0, 0)
+
+
+def _extract_pyz_version(archive_bytes: bytes) -> str | None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as zf:
+            if "trellis_mcp/__init__.py" not in zf.namelist():
+                return None
+            init_src = zf.read("trellis_mcp/__init__.py").decode("utf-8", errors="ignore")
+    except (zipfile.BadZipFile, OSError):
+        return None
+    m = _VERSION_ASSIGN_RE.search(init_src)
+    return m.group(1).strip() if m else None
 
 # Default read-only tool allowlist for `member` API keys ([REQ-TRL-18]).
 # Excludes write-capable and server-filesystem-scanning tools (handoff, doctor, scan, mcp_registry, analytics).
@@ -311,9 +349,8 @@ class TrellisKeyStore:
     def ensure_admin_key(self) -> tuple[str | None, bool]:
         """Return an existing active admin key or auto-generate one ([REQ-MCP-08-01]).
 
-        Returns `(raw_key, generated)`. `raw_key` is only available for legacy
-        plaintext records or when a new key is generated; hashed records cannot
-        be recovered, so `(None, False)` indicates an admin already exists.
+        Returns `(raw_key, generated)`. Hashed records cannot be recovered,
+        so `(None, False)` indicates an active hashed admin already exists.
         """
         now = datetime.now(timezone.utc)
         records = self._load_records()
@@ -324,9 +361,7 @@ class TrellisKeyStore:
                 or self._is_expired(rec, now)
             ):
                 continue
-            if rec.get("token"):
-                return str(rec["token"]), False
-            if rec.get("token_hash"):
+            if rec.get("token_hash") and rec.get("salt"):
                 return None, False
         created = self.generate_key(label="admin", role="admin")
         return str(created["api_key"]), True
@@ -338,18 +373,37 @@ class TrellisKeyStore:
             not rec.get("revoked")
             and rec.get("role") == "admin"
             and not self._is_expired(rec, now)
-            and (rec.get("token_hash") or rec.get("token"))
+            and bool(rec.get("token_hash") and rec.get("salt"))
             for rec in records
         )
+
+    def migrate_legacy_plaintext_keys(self) -> int:
+        """Hash any legacy plaintext `token` entries in place and strip raw tokens ([REQ-TRL-23])."""
+        migrated = 0
+        with self._lock:
+            records = self._load_records()
+            for rec in records:
+                raw_tok = rec.get("token")
+                if not raw_tok:
+                    continue
+                salt = secrets.token_hex(16)
+                rec["salt"] = salt
+                rec["token_hash"] = _hash_token(str(raw_tok), salt)
+                rec.pop("token", None)
+                if str(rec.get("role", "member")).lower() == "member" and not rec.get("scopes"):
+                    rec["scopes"] = list(DEFAULT_MEMBER_SCOPES)
+                migrated += 1
+            if migrated:
+                self._save_records(records)
+        return migrated
 
     def authenticate(
         self, candidate: str | None
     ) -> tuple[str, str, str] | None:
-        """Verify a candidate token and return `(role, key_id, label)` or None ([REQ-P2-05])."""
+        """Verify a candidate token against salted SHA-256 hashes only ([REQ-P2-05, REQ-TRL-23])."""
         if not candidate:
             return None
         now = datetime.now(timezone.utc)
-        cand_bytes = candidate.encode("utf-8")
         matched: tuple[str, str, str] | None = None
         with self._lock:
             records = self._load_records_cached()
@@ -359,11 +413,9 @@ class TrellisKeyStore:
                     continue
                 salt = rec.get("salt")
                 token_hash = rec.get("token_hash")
-                is_match = False
-                if token_hash and salt:
-                    is_match = hmac.compare_digest(_hash_token(candidate, str(salt)), str(token_hash))
-                elif rec.get("token"):
-                    is_match = hmac.compare_digest(cand_bytes, str(rec["token"]).encode("utf-8"))
+                if not (token_hash and salt):
+                    continue
+                is_match = hmac.compare_digest(_hash_token(candidate, str(salt)), str(token_hash))
                 if is_match:
                     matched = (
                         str(rec.get("role", "member")),
@@ -468,9 +520,21 @@ class TrellisHTTPServer:
         audit_log: Path | None = None,
         auth_failure_limit: int = 5,
         auth_lockout_sec: float = 60.0,
+        enable_remote_deploy: bool = False,
+        deploy_signing_key: str | None = None,
+        insecure_http: bool = False,
+        public_url: str | None = None,
+        allowed_hosts: list[str] | tuple[str, ...] | None = None,
+        trusted_proxies: list[str] | tuple[str, ...] | None = None,
+        max_tracked_ips: int = DEFAULT_MAX_TRACKED_IPS,
     ) -> None:
         if (tls_cert is None) != (tls_key is None):
             raise ValueError("Both `tls_cert` and `tls_key` must be provided together for HTTPS.")
+        if not _is_loopback_host(host) and not (tls_cert and tls_key) and not insecure_http:
+            raise ValueError(
+                "Refusing to bind non-loopback host without TLS ([REQ-TRL-21]). "
+                "Pass --tls-cert and --tls-key, or pass --insecure-http explicitly."
+            )
 
         self.workspace_root = (workspace_root or PACKAGE_ROOT).resolve()
         resolved_keys_file = (
@@ -497,6 +561,44 @@ class TrellisHTTPServer:
             if bundle_signing_key is not None
             else os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY", "")
         ).strip() or None
+        self.enable_remote_deploy = bool(enable_remote_deploy)
+        self.deploy_signing_key = (
+            deploy_signing_key
+            if deploy_signing_key is not None
+            else os.environ.get("TRELLIS_DEPLOY_SIGNING_KEY", "")
+        ).strip() or None
+        self.insecure_http = bool(insecure_http)
+        raw_public_url = (
+            public_url if public_url is not None else os.environ.get("TRELLIS_PUBLIC_URL", "")
+        ).strip().rstrip("/")
+        if raw_public_url and not _SAFE_URL_RE.match(raw_public_url):
+            raise ValueError(f"Invalid public_url format: {raw_public_url!r}")
+        self.public_url: str | None = raw_public_url or None
+        env_proxies = [
+            p.strip() for p in os.environ.get("TRELLIS_TRUSTED_PROXIES", "").split(",") if p.strip()
+        ]
+        self.trusted_proxies: set[str] = (
+            {str(p).strip() for p in trusted_proxies if str(p).strip()}
+            if trusted_proxies is not None
+            else set(env_proxies)
+        )
+        env_hosts = [
+            _strip_host_port(h)
+            for h in os.environ.get("TRELLIS_ALLOWED_HOSTS", "").split(",")
+            if h.strip()
+        ]
+        host_allow: set[str] = set(_LOOPBACK_HOSTS) if _is_loopback_host(host) else set()
+        if host.strip() and host.strip() not in ("0.0.0.0", "::"):
+            host_allow.add(_strip_host_port(host))
+        if self.public_url:
+            parsed_pub = urlparse(self.public_url)
+            if parsed_pub.hostname:
+                host_allow.add(parsed_pub.hostname.lower())
+        if allowed_hosts is not None:
+            host_allow.update(_strip_host_port(str(h)) for h in allowed_hosts if str(h).strip())
+        host_allow.update(h for h in env_hosts if h)
+        self.allowed_hosts: set[str] = {h for h in host_allow if h}
+        self.max_tracked_ips = max(1, int(max_tracked_ips))
         self.max_body_bytes = int(max_body_bytes)
         self.rate_limit = int(rate_limit)
         self.rate_window_sec = float(rate_window_sec)
@@ -585,7 +687,10 @@ class TrellisHTTPServer:
                 except OSError:
                     pass
 
-                client_ip = self.client_address[0] if self.client_address else "unknown"
+                peer_ip = self.client_address[0] if self.client_address else "unknown"
+                req_headers = {k: v for k, v in self.headers.items()}
+                norm_hdrs = {k.lower(): v for k, v in req_headers.items()}
+                client_ip = parent._resolve_client_ip(peer_ip, norm_hdrs)
                 clean_path = self.path.split("?", 1)[0].rstrip("/") or "/"
                 if clean_path not in ("/healthz", "/readyz") and not parent._allow_request(client_ip):
                     self._send(
@@ -620,13 +725,12 @@ class TrellisHTTPServer:
                     )
                     return
 
-                req_headers = {k: v for k, v in self.headers.items()}
                 status, resp_headers, resp_body = parent.dispatch_http(
                     method=method,
                     path=self.path,
                     headers=req_headers,
                     body=raw_body,
-                    client_ip=client_ip,
+                    client_ip=peer_ip,
                 )
                 self._send(status, resp_headers, resp_body)
 
@@ -658,18 +762,53 @@ class TrellisHTTPServer:
         self._thread: threading.Thread | None = None
         _ACTIVE_SERVERS[self.base_url] = self
 
+    def _resolve_client_ip(self, peer_ip: str, norm_headers: dict[str, str]) -> str:
+        """Resolve end-client IP, honoring X-Forwarded-For only from configured trusted proxies ([REQ-TRL-23])."""
+        clean_peer = (peer_ip or "unknown").strip()
+        if clean_peer not in self.trusted_proxies:
+            return clean_peer
+        xff = (norm_headers.get("x-forwarded-for") or "").strip()
+        if not xff:
+            return clean_peer
+        hops = [h.strip() for h in xff.split(",") if h.strip()]
+        for hop in reversed(hops):
+            if hop not in self.trusted_proxies:
+                return hop
+        return hops[0] if hops else clean_peer
+
+    def _evict_rate_hits_locked(self, now: float) -> None:
+        cutoff = now - self.rate_window_sec
+        stale = [
+            ip for ip, stamps in self._rate_hits.items()
+            if not stamps or stamps[-1] < cutoff
+        ]
+        for ip in stale:
+            self._rate_hits.pop(ip, None)
+        if len(self._rate_hits) > self.max_tracked_ips:
+            # Drop oldest-activity IPs to guarantee bounded memory under IP spray
+            ordered = sorted(
+                self._rate_hits.items(),
+                key=lambda item: item[1][-1] if item[1] else 0.0,
+            )
+            excess = len(self._rate_hits) - self.max_tracked_ips
+            for ip, _ in ordered[:excess]:
+                self._rate_hits.pop(ip, None)
+
     def _allow_request(self, client_ip: str) -> bool:
-        """Sliding-window per-client rate limiter (thread-safe)."""
+        """Sliding-window per-client rate limiter with bounded TTL eviction ([REQ-TRL-23])."""
         if self.rate_limit <= 0:
             return True
         now = time.monotonic()
         with self._rate_lock:
+            self._evict_rate_hits_locked(now)
             hits = [t for t in self._rate_hits.get(client_ip, []) if now - t < self.rate_window_sec]
             if len(hits) >= self.rate_limit:
                 self._rate_hits[client_ip] = hits
                 return False
             hits.append(now)
             self._rate_hits[client_ip] = hits
+            if len(self._rate_hits) > self.max_tracked_ips:
+                self._evict_rate_hits_locked(now)
         return True
 
     @property
@@ -874,6 +1013,36 @@ class TrellisHTTPServer:
             parts.append("Secure")
         return "; ".join(parts)
 
+    def _host_allowed(self, headers: dict[str, str]) -> bool:
+        """Validate the HTTP Host header against configured/loopback allowlist to stop DNS rebinding ([REQ-TRL-21])."""
+        raw_host = (headers.get("host") or "").strip()
+        if not raw_host:
+            return True
+        if not self.allowed_hosts:
+            return True
+        hostname = _strip_host_port(raw_host)
+        return hostname in self.allowed_hosts
+
+    def _public_base_url(self, headers: dict[str, str], peer_ip: str = "127.0.0.1") -> str:
+        """Resolve public server base URL from --public-url or validated Host/proxy headers ([REQ-TRL-21])."""
+        if self.public_url:
+            return self.public_url
+        raw_host = (headers.get("host") or "").strip()
+        if raw_host and self._host_allowed(headers):
+            host_part = raw_host
+        else:
+            connect_host = "127.0.0.1" if self.host in ("0.0.0.0", "::") else self.host
+            host_part = f"{connect_host}:{self.port}"
+        scheme = self.scheme
+        if peer_ip in self.trusted_proxies:
+            xfp = (headers.get("x-forwarded-proto") or "").strip().lower()
+            if xfp in ("http", "https"):
+                scheme = xfp
+        candidate = f"{scheme}://{host_part}"
+        if not _SAFE_URL_RE.match(candidate):
+            return self.base_url
+        return candidate
+
     def _csrf_ok(self, headers: dict[str, str], auth_source: str | None) -> bool:
         if auth_source != "cookie":
             return True
@@ -882,21 +1051,29 @@ class TrellisHTTPServer:
         origin = (headers.get("origin") or "").strip()
         if not origin:
             return True
+        if not self._host_allowed(headers):
+            return False
+        if self.public_url and origin.rstrip("/") == self.public_url:
+            return True
         host = (headers.get("host") or f"{self.host}:{self.port}").strip()
         scheme = (headers.get("x-forwarded-proto") or self.scheme).strip().lower()
         return origin.rstrip("/") == f"{scheme}://{host}"
 
     def _origin_allowed(self, headers: dict[str, str]) -> bool:
-        """Validate Origin header on /mcp and /admin/* against explicit or loopback allowlist ([REQ-TRL-01])."""
+        """Validate Origin header on /mcp and /admin/* against explicit, public_url, or verified allowlisted Host ([REQ-TRL-01, REQ-TRL-21])."""
         origin = (headers.get("origin") or "").strip().rstrip("/")
         if not origin:
             return True
         if self.allowed_origins is not None:
             return origin in {o.strip().rstrip("/") for o in self.allowed_origins if o.strip()}
-        host = (headers.get("host") or f"{self.host}:{self.port}").strip()
-        scheme = (headers.get("x-forwarded-proto") or self.scheme).strip().lower()
-        allowed = {f"{scheme}://{host}", f"http://{host}", f"https://{host}"}
-        if self.host in ("127.0.0.1", "localhost", "::1"):
+        allowed: set[str] = set()
+        if self.public_url:
+            allowed.add(self.public_url)
+        raw_host = (headers.get("host") or "").strip()
+        if raw_host and self._host_allowed(headers):
+            scheme = (headers.get("x-forwarded-proto") or self.scheme).strip().lower()
+            allowed.update({f"{scheme}://{raw_host}", f"http://{raw_host}", f"https://{raw_host}"})
+        if _is_loopback_host(self.host):
             allowed.update(
                 {
                     f"http://127.0.0.1:{self.port}",
@@ -909,9 +1086,38 @@ class TrellisHTTPServer:
             )
         return origin in allowed
 
+    def _evict_auth_state_locked(self, now: float) -> None:
+        cutoff = now - 60.0
+        stale_fail = [
+            ip for ip, stamps in self._auth_failures.items()
+            if not stamps or stamps[-1] < cutoff
+        ]
+        for ip in stale_fail:
+            self._auth_failures.pop(ip, None)
+        expired_locks = [
+            ip for ip, until in self._auth_lockout_until.items()
+            if until <= now
+        ]
+        for ip in expired_locks:
+            self._auth_lockout_until.pop(ip, None)
+        if len(self._auth_failures) > self.max_tracked_ips:
+            ordered = sorted(
+                self._auth_failures.items(),
+                key=lambda item: item[1][-1] if item[1] else 0.0,
+            )
+            excess = len(self._auth_failures) - self.max_tracked_ips
+            for ip, _ in ordered[:excess]:
+                self._auth_failures.pop(ip, None)
+        if len(self._auth_lockout_until) > self.max_tracked_ips:
+            ordered_locks = sorted(self._auth_lockout_until.items(), key=lambda item: item[1])
+            excess = len(self._auth_lockout_until) - self.max_tracked_ips
+            for ip, _ in ordered_locks[:excess]:
+                self._auth_lockout_until.pop(ip, None)
+
     def _is_locked_out(self, client_ip: str) -> int | None:
         now = time.monotonic()
         with self._auth_fail_lock:
+            self._evict_auth_state_locked(now)
             until = self._auth_lockout_until.get(client_ip, 0.0)
             if until > now:
                 return max(1, int(until - now))
@@ -923,11 +1129,14 @@ class TrellisHTTPServer:
         now = time.monotonic()
         cutoff = now - 60.0
         with self._auth_fail_lock:
+            self._evict_auth_state_locked(now)
             history = [t for t in self._auth_failures.get(client_ip, []) if t >= cutoff]
             history.append(now)
             self._auth_failures[client_ip] = history
             if len(history) >= max(1, self.auth_failure_limit):
                 self._auth_lockout_until[client_ip] = now + max(1.0, self.auth_lockout_sec)
+            if len(self._auth_failures) > self.max_tracked_ips:
+                self._evict_auth_state_locked(now)
 
     def _clear_auth_failures(self, client_ip: str) -> None:
         with self._auth_fail_lock:
@@ -990,15 +1199,23 @@ class TrellisHTTPServer:
         """Process an HTTP request, record metrics and audit log, and return `(status, headers, body)` ([REQ-P2-05], [REQ-TRL-02])."""
         started = time.monotonic()
         audit_ctx: dict[str, Any] = {}
+        norm_hdrs = {k.lower(): v for k, v in headers.items()}
+        effective_ip = self._resolve_client_ip(client_ip, norm_hdrs)
         status, resp_headers, resp_body = self._dispatch_http(
-            method, path, headers, body, client_ip=client_ip, audit_ctx=audit_ctx
+            method,
+            path,
+            headers,
+            body,
+            client_ip=effective_ip,
+            peer_ip=client_ip,
+            audit_ctx=audit_ctx,
         )
         elapsed = time.monotonic() - started
         clean_path = path.split("?", 1)[0].rstrip("/") or "/"
         self._record_metrics(method, clean_path, status, elapsed)
         try:
             self.audit_logger.record(
-                client_ip=client_ip,
+                client_ip=effective_ip,
                 key_id=audit_ctx.get("key_id"),
                 role=audit_ctx.get("role"),
                 method=method.upper(),
@@ -1022,6 +1239,7 @@ class TrellisHTTPServer:
         body: bytes = b"",
         *,
         client_ip: str = "127.0.0.1",
+        peer_ip: str = "127.0.0.1",
         audit_ctx: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         """Internal request handler (wrapped by `dispatch_http` for observability)."""
@@ -1071,9 +1289,10 @@ class TrellisHTTPServer:
             )
 
         if method == "GET" and clean_path == "/.well-known/agent.json":
-            host_hdr = (norm_headers.get("host") or f"{self.host}:{self.port}").strip()
-            scheme = (norm_headers.get("x-forwarded-proto") or self.scheme).strip().lower()
-            return _json_resp(200, build_a2a_agent_card(f"{scheme}://{host_hdr}"))
+            return _json_resp(
+                200,
+                build_a2a_agent_card(self._public_base_url(norm_headers, peer_ip=peer_ip)),
+            )
 
         if method == "GET" and clean_path == "/favicon.ico":
             return (
@@ -1202,6 +1421,17 @@ class TrellisHTTPServer:
                 405, {"error": f"Method not allowed on /admin/session: {method}"}
             )
 
+        if (clean_path == "/mcp" or clean_path.startswith("/admin/") or clean_path == "/install.sh") and not self._host_allowed(
+            norm_headers
+        ):
+            return _json_resp(
+                403,
+                {
+                    "error": "Forbidden",
+                    "message": "Request Host header is not in the Trellis server allowlist ([REQ-TRL-21]).",
+                },
+            )
+
         if (clean_path == "/mcp" or clean_path.startswith("/admin/")) and not self._origin_allowed(
             norm_headers
         ):
@@ -1280,8 +1510,16 @@ class TrellisHTTPServer:
             metrics_snapshot["version"] = __version__
             return _json_resp(200, metrics_snapshot)
 
-        # Admin Bundle Hot-Deploy Endpoint ([REQ-MCP-09])
+        # Admin Bundle Hot-Deploy Endpoint ([REQ-MCP-09, REQ-TRL-20])
         if clean_path == "/admin/deploy":
+            if not self.enable_remote_deploy:
+                return _json_resp(
+                    403,
+                    {
+                        "error": "Forbidden",
+                        "message": "Remote hot-deploy endpoint /admin/deploy is disabled by default ([REQ-TRL-20]).",
+                    },
+                )
             if role != "admin":
                 return _json_resp(
                     403,
@@ -1294,22 +1532,40 @@ class TrellisHTTPServer:
                 return _json_resp(405, {"error": f"Method not allowed on /admin/deploy: {method}"})
 
             candidate = extract_bearer_token(auth_hdr) or ""
+            if not self.deploy_signing_key:
+                return _json_resp(
+                    403,
+                    {
+                        "error": "Deploy signing key not configured",
+                        "message": "Configure a separate --deploy-signing-key / TRELLIS_DEPLOY_SIGNING_KEY ([REQ-TRL-20]).",
+                    },
+                )
+            if candidate and hmac.compare_digest(
+                self.deploy_signing_key.encode("utf-8"), candidate.encode("utf-8")
+            ):
+                return _json_resp(
+                    403,
+                    {
+                        "error": "Deploy key separation violation",
+                        "message": "Deploy signing key must be distinct from the admin bearer token ([REQ-TRL-20]).",
+                    },
+                )
             provided_sig = (norm_headers.get(_SIGNATURE_HEADER) or "").strip().lower()
             if not provided_sig:
                 return _json_resp(
                     400,
                     {
                         "error": "Missing X-Trellis-Signature header",
-                        "message": "Sign the .pyz bytes with HMAC-SHA256 using your admin Bearer token.",
+                        "message": "Sign the .pyz bytes with HMAC-SHA256 using the configured deploy signing key ([REQ-TRL-20]).",
                     },
                 )
-            expected_sig = compute_hmac_signature(body, candidate)
+            expected_sig = compute_hmac_signature(body, self.deploy_signing_key)
             if not hmac.compare_digest(expected_sig, provided_sig):
                 return _json_resp(
                     403,
                     {
                         "error": "Invalid deploy signature",
-                        "message": "X-Trellis-Signature must be HMAC-SHA256(payload, admin_bearer_token).",
+                        "message": "X-Trellis-Signature must match HMAC-SHA256(payload, deploy_signing_key) ([REQ-TRL-20]).",
                     },
                 )
             if not body or not zipfile.is_zipfile(io.BytesIO(body)):
@@ -1318,23 +1574,77 @@ class TrellisHTTPServer:
                 if "trellis_mcp/__main__.py" not in zf.namelist():
                     return _json_resp(400, {"error": "Archive is missing trellis_mcp/__main__.py."})
 
+            uploaded_version = _extract_pyz_version(body)
+            if not uploaded_version:
+                return _json_resp(
+                    400,
+                    {"error": "Archive is missing trellis_mcp/__init__.py with a valid __version__."},
+                )
+
             target_pyz = (
                 self.workspace_root
                 if self.workspace_root.is_file()
                 else (self.workspace_root / "trellis-mcp.pyz")
             )
+            uploaded_tuple = _parse_semver(uploaded_version)
+            running_tuple = _parse_semver(__version__)
+            if target_pyz.is_file():
+                existing_ver = _extract_pyz_version(target_pyz.read_bytes()) or __version__
+                if uploaded_tuple <= _parse_semver(existing_ver):
+                    return _json_resp(
+                        409,
+                        {
+                            "error": "Version conflict",
+                            "message": f"Uploaded version {uploaded_version} must be strictly greater than deployed version {existing_ver} ([REQ-TRL-20]).",
+                        },
+                    )
+            elif uploaded_tuple < running_tuple:
+                return _json_resp(
+                    409,
+                    {
+                        "error": "Version downgrade rejected",
+                        "message": f"Uploaded version {uploaded_version} is lower than running version {__version__} ([REQ-TRL-20]).",
+                    },
+                )
+
+            artifact_sha256 = hash_payload_sha256(body)
             target_pyz.parent.mkdir(parents=True, exist_ok=True)
-            target_pyz.write_bytes(body)
+            backup_path: Path | None = None
+            if target_pyz.is_file():
+                backup_path = target_pyz.with_suffix(".pyz.bak")
+                shutil.copy2(target_pyz, backup_path)
+
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                prefix=".trellis-deploy-", suffix=".tmp", dir=str(target_pyz.parent)
+            )
+            try:
+                with os.fdopen(tmp_fd, "wb") as tmp_fh:
+                    tmp_fh.write(body)
+                    tmp_fh.flush()
+                    os.fsync(tmp_fh.fileno())
+                os.replace(tmp_name, target_pyz)
+            except OSError:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+
             self.mcp_server = TrellisMCPServer(workspace_root=target_pyz)
             with self._bundle_cache_lock:
                 self._bundle_digest_cache = None
                 self._bundle_digest_ts = 0.0
+            if audit_ctx is not None:
+                audit_ctx["decision"] = f"deploy:v={uploaded_version}:sha256={artifact_sha256}"
             return _json_resp(
                 200,
                 {
                     "status": "deployed",
                     "target": str(target_pyz),
+                    "backup": str(backup_path) if backup_path else None,
                     "bytes": len(body),
+                    "sha256": artifact_sha256,
+                    "deployed_version": uploaded_version,
                     "version": __version__,
                 },
             )
@@ -1359,9 +1669,7 @@ class TrellisHTTPServer:
                         "message": "Missing or invalid X-Trellis-CSRF header for cookie-authenticated requests.",
                     },
                 )
-            host_hdr = norm_headers.get("host") or f"{self.host}:{self.port}"
-            scheme = norm_headers.get("x-forwarded-proto", "http")
-            public_base = f"{scheme}://{host_hdr}"
+            public_base = self._public_base_url(norm_headers, peer_ip=peer_ip)
 
             if method == "GET" and clean_path == "/admin/keys":
                 return _json_resp(200, {"keys": self.key_store.list_keys()})
@@ -1450,9 +1758,9 @@ class TrellisHTTPServer:
                 return 200, headers, raw
 
             if clean_path == "/install.sh":
-                host_hdr = norm_headers.get("host") or f"{self.host}:{self.port}"
-                scheme = norm_headers.get("x-forwarded-proto", self.scheme)
-                script = render_remote_install_script(f"{scheme}://{host_hdr}")
+                script = render_remote_install_script(
+                    self._public_base_url(norm_headers, peer_ip=peer_ip)
+                )
                 raw = script.encode("utf-8")
                 headers = {
                     "Content-Type": "text/x-shellscript; charset=utf-8",

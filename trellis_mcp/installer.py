@@ -17,8 +17,10 @@ import hmac
 import io
 import json
 import os
+import re
 import shutil
 import sys
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -27,17 +29,51 @@ from urllib.request import Request
 from trellis_mcp import __version__
 from trellis_mcp.tools import STANDARD_FILE_MAP, list_bundled_skills, read_bundled_text
 
+SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_SAFE_BASE_URL_RE = re.compile(r"^https?://[A-Za-z0-9._:\-\[\]]+(?:/[A-Za-z0-9._/\-]*)?$")
 
-def _merge_mcp_config(config_path: Path, server_entry: dict[str, Any]) -> None:
-    """Safely merge `trellis-mcp` into an existing or new MCP JSON config file."""
+
+def validate_skill_name(name: str) -> bool:
+    """Return True iff `name` is a safe single-segment lowercase skill identifier ([REQ-TRL-22])."""
+    return bool(isinstance(name, str) and SKILL_NAME_RE.match(name))
+
+
+def _chmod_owner_only(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _merge_mcp_config(
+    config_path: Path,
+    server_entry: dict[str, Any],
+    *,
+    restrict_permissions: bool = False,
+) -> None:
+    """Safely merge `trellis-mcp` into an existing or new MCP JSON config file ([REQ-TRL-22]).
+
+    If an existing config file cannot be parsed as valid JSON, backs it up to
+    `<name>.bak.<timestamp>` and aborts with ValueError instead of silently wiping other servers.
+    """
     data: dict[str, Any] = {"mcpServers": {}}
     if config_path.exists():
+        raw_existing = config_path.read_text(encoding="utf-8")
         try:
-            loaded = json.loads(config_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data = loaded
-        except json.JSONDecodeError:
-            data = {"mcpServers": {}}
+            loaded = json.loads(raw_existing)
+        except json.JSONDecodeError as exc:
+            backup = config_path.with_name(f"{config_path.name}.bak.{int(time.time())}")
+            shutil.copy2(config_path, backup)
+            raise ValueError(
+                f"Refusing to overwrite malformed MCP config `{config_path}` (backup saved to `{backup.name}`): {exc}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            backup = config_path.with_name(f"{config_path.name}.bak.{int(time.time())}")
+            shutil.copy2(config_path, backup)
+            raise ValueError(
+                f"Refusing to overwrite non-object MCP config `{config_path}` (backup saved to `{backup.name}`)."
+            )
+        data = loaded
 
     if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
         data["mcpServers"] = {}
@@ -45,6 +81,8 @@ def _merge_mcp_config(config_path: Path, server_entry: dict[str, Any]) -> None:
     data["mcpServers"]["trellis-mcp"] = server_entry
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if restrict_permissions:
+        _chmod_owner_only(config_path)
 
 
 def sync_workspace(repo_root: Path) -> str:
@@ -284,11 +322,16 @@ def install_remote(
     api_key: str | None = None,
     home_dir: Path | None = None,
     signing_key: str | None = None,
+    *,
+    allow_unsigned: bool = False,
+    write_literal_key: bool = False,
 ) -> str:
-    """Zero-clone client installer: fetches `/bundle.json` from a remote VM and configures MCP + skills ([REQ-MCP-07])."""
+    """Zero-clone client installer: fetches `/bundle.json`, verifies signature & skill names, and configures MCP + skills ([REQ-MCP-07, REQ-TRL-22])."""
     base = server_url.rstrip("/")
     if base.endswith("/mcp"):
         base = base[:-4]
+    if not _SAFE_BASE_URL_RE.match(base):
+        raise ValueError(f"Invalid server_url: {server_url!r}")
     mcp_endpoint = f"{base}/mcp"
     bundle_endpoint = f"{base}/bundle.json"
 
@@ -296,6 +339,12 @@ def install_remote(
     resolved_signing_key = (
         signing_key if signing_key is not None else os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY", "")
     ).strip() or None
+    if not resolved_signing_key and not allow_unsigned:
+        raise ValueError(
+            "Bundle signature verification is mandatory ([REQ-TRL-22]). "
+            "Pass --bundle-signing-key / TRELLIS_BUNDLE_SIGNING_KEY, or opt in explicitly with --allow-unsigned."
+        )
+
     headers: dict[str, str] = {"Accept": "application/json"}
     if resolved_key:
         headers["Authorization"] = f"Bearer {resolved_key}"
@@ -322,11 +371,57 @@ def install_remote(
                 )
         bundle = json.loads(raw.decode("utf-8"))
 
+    skills_map: dict[str, str] = dict(bundle.get("skills") or {})
+    for skill_name in skills_map:
+        if not validate_skill_name(skill_name):
+            raise ValueError(
+                f"Invalid skill name in remote bundle: {skill_name!r} "
+                "(must match ^[a-z0-9][a-z0-9-]{{0,62}}$) ([REQ-TRL-22])."
+            )
+
     home = (home_dir or Path.home()).resolve()
     plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
     plugin_rules_dir = plugin_dir / "rules"
     plugin_skills_dir = plugin_dir / "skills"
     claude_global_skills = home / ".claude" / "skills"
+
+    # Compute diff summary against existing installed files before writing ([REQ-TRL-22 / F6])
+    added_skills: list[str] = []
+    updated_skills: list[str] = []
+    unchanged_skills: list[str] = []
+    for skill_name, skill_content in sorted(skills_map.items()):
+        existing_path = plugin_skills_dir / skill_name / "SKILL.md"
+        new_text = str(skill_content)
+        if not existing_path.exists():
+            added_skills.append(skill_name)
+        elif existing_path.read_text(encoding="utf-8", errors="ignore") != new_text:
+            updated_skills.append(skill_name)
+        else:
+            unchanged_skills.append(skill_name)
+
+    # Validate & merge MCP configs FIRST so malformed existing configs abort cleanly before partial writes
+    auth_header_val = (
+        f"Bearer {resolved_key}"
+        if (write_literal_key and resolved_key)
+        else "Bearer ${TRELLIS_API_KEY}"
+    )
+    remote_mcp_entry: dict[str, Any] = {
+        "serverUrl": mcp_endpoint,
+        "headers": {
+            "Authorization": auth_header_val
+        },
+    }
+    _merge_mcp_config(
+        home / ".gemini" / "config" / "mcp_config.json",
+        remote_mcp_entry,
+        restrict_permissions=True,
+    )
+    _merge_mcp_config(
+        plugin_dir / ".mcp.json",
+        remote_mcp_entry,
+        restrict_permissions=True,
+    )
+
     plugin_rules_dir.mkdir(parents=True, exist_ok=True)
     plugin_skills_dir.mkdir(parents=True, exist_ok=True)
     claude_global_skills.mkdir(parents=True, exist_ok=True)
@@ -334,7 +429,7 @@ def install_remote(
     plugin_manifest = {
         "name": "trellis",
         "version": bundle.get("version", __version__),
-        "description": "Trellis AI Engineering Playbook (Remote VM MCP + Global Skills)",
+        "description": "Trellis AI Engineering Playbook (Remote MCP + Global Skills)",
         "author": {"name": "HTA"},
         "rules": "rules/AGENTS.md",
         "skills": "skills",
@@ -347,38 +442,32 @@ def install_remote(
         str(bundle.get("rules_md", "")), encoding="utf-8"
     )
 
-    skills_map: dict[str, str] = dict(bundle.get("skills") or {})
     for skill_name, skill_content in sorted(skills_map.items()):
         for target_base in (plugin_skills_dir, claude_global_skills):
             dest = target_base / skill_name
             dest.mkdir(parents=True, exist_ok=True)
             (dest / "SKILL.md").write_text(str(skill_content), encoding="utf-8")
 
-    remote_mcp_entry: dict[str, Any] = {
-        "serverUrl": mcp_endpoint,
-        "headers": {
-            "Authorization": f"Bearer {resolved_key}" if resolved_key else "Bearer ${TRELLIS_API_KEY}"
-        },
-    }
-    _merge_mcp_config(plugin_dir / ".mcp.json", remote_mcp_entry)
-    _merge_mcp_config(home / ".gemini" / "config" / "mcp_config.json", remote_mcp_entry)
-
     return (
         f"Installed remote `trellis-mcp` client (zero git clone):\n"
         f"- Remote MCP endpoint: `{mcp_endpoint}`\n"
         f"- Antigravity plugin: `{plugin_dir}`\n"
-        f"- Global MCP config: `{home / '.gemini/config/mcp_config.json'}`\n"
+        f"- Global MCP config: `{home / '.gemini/config/mcp_config.json'}` (mode 0600, env-var token ref)\n"
+        f"- Bundle diff: +{len(added_skills)} added, ~{len(updated_skills)} updated, ={len(unchanged_skills)} unchanged\n"
         f"- Installed {len(skills_map)} `/pb-*` & engineering skills into `{claude_global_skills}`"
     )
 
 
 def render_remote_install_script(base_url: str) -> str:
-    """Render a zero-clone POSIX shell script (`GET /install.sh`) for teammates on any machine."""
+    """Render a hardened zero-clone POSIX shell script (`GET /install.sh`) ([REQ-TRL-22])."""
     clean_base = base_url.rstrip("/")
+    if not _SAFE_BASE_URL_RE.match(clean_base):
+        raise ValueError(f"Refusing to render installer for unsafe base_url: {base_url!r}")
     return f"""#!/bin/sh
 # Zero-Clone Remote Installer for Trellis MCP ({clean_base})
 # Usage:
 #   export TRELLIS_API_KEY="<your-team-api-key>"
+#   export TRELLIS_BUNDLE_SIGNING_KEY="<bundle-signing-key>"
 #   curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" {clean_base}/install.sh | sh
 set -eu
 
@@ -389,13 +478,18 @@ if [ -z "${{TRELLIS_API_KEY:-}}" ]; then
 fi
 
 python3 - "{clean_base}" <<'PYEOF'
-import hashlib, hmac, json, os, sys
+import hashlib, hmac, json, os, re, shutil, sys, time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+SKILL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{{0,62}}$")
 base = sys.argv[1].rstrip("/")
 key = os.environ["TRELLIS_API_KEY"].strip()
 signing_key = os.environ.get("TRELLIS_BUNDLE_SIGNING_KEY", "").strip()
+allow_unsigned = os.environ.get("TRELLIS_ALLOW_UNSIGNED", "").strip().lower() in ("1", "true", "yes")
+if not signing_key and not allow_unsigned:
+    sys.exit("Error: TRELLIS_BUNDLE_SIGNING_KEY is required (or set TRELLIS_ALLOW_UNSIGNED=1 explicitly).")
+
 req = Request(f"{{base}}/bundle.json", headers={{"Authorization": f"Bearer {{key}}", "Accept": "application/json"}})
 with urlopen(req, timeout=15) as resp:
     raw = resp.read()
@@ -408,8 +502,37 @@ with urlopen(req, timeout=15) as resp:
             sys.exit("Error: bundle signature verification failed (possible tampering); refusing install.")
     bundle = json.loads(raw.decode("utf-8"))
 
+skills = bundle.get("skills", {{}})
+for name in skills:
+    if not isinstance(name, str) or not SKILL_RE.match(name):
+        sys.exit(f"Error: invalid skill name in bundle: {{name!r}}")
+
 home = Path.home()
 plugin_dir = home / ".gemini" / "config" / "plugins" / "trellis"
+entry = {{
+    "serverUrl": f"{{base}}/mcp",
+    "headers": {{"Authorization": "Bearer ${{TRELLIS_API_KEY}}"}}
+}}
+for cfg in (home / ".gemini" / "config" / "mcp_config.json", plugin_dir / ".mcp.json"):
+    data = {{"mcpServers": {{}}}}
+    if cfg.exists():
+        try:
+            loaded = json.loads(cfg.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("JSON root must be an object")
+            data = loaded
+        except Exception as exc:
+            backup = cfg.with_name(f"{{cfg.name}}.bak.{{int(time.time())}}")
+            shutil.copy2(cfg, backup)
+            sys.exit(f"Error: malformed MCP config {{cfg}} (backup saved to {{backup.name}}): {{exc}}")
+    data.setdefault("mcpServers", {{}})["trellis-mcp"] = entry
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+    try:
+        os.chmod(cfg, 0o600)
+    except OSError:
+        pass
+
 (plugin_dir / "rules").mkdir(parents=True, exist_ok=True)
 (plugin_dir / "skills").mkdir(parents=True, exist_ok=True)
 claude_skills = home / ".claude" / "skills"
@@ -418,7 +541,7 @@ claude_skills.mkdir(parents=True, exist_ok=True)
 (plugin_dir / "plugin.json").write_text(json.dumps({{
     "name": "trellis",
     "version": bundle.get("version", "0.1.0"),
-    "description": "Trellis AI Engineering Playbook (Remote VM MCP)",
+    "description": "Trellis AI Engineering Playbook (Remote MCP)",
     "author": {{"name": "HTA"}},
     "rules": "rules/AGENTS.md",
     "skills": "skills",
@@ -427,27 +550,12 @@ claude_skills.mkdir(parents=True, exist_ok=True)
 
 (plugin_dir / "rules" / "AGENTS.md").write_text(bundle.get("rules_md", ""), encoding="utf-8")
 
-for name, text in bundle.get("skills", {{}}).items():
+for name, text in skills.items():
     for root in (plugin_dir / "skills", claude_skills):
         d = root / name
         d.mkdir(parents=True, exist_ok=True)
         (d / "SKILL.md").write_text(text, encoding="utf-8")
 
-entry = {{
-    "serverUrl": f"{{base}}/mcp",
-    "headers": {{"Authorization": f"Bearer {{key}}"}}
-}}
-for cfg in (plugin_dir / ".mcp.json", home / ".gemini" / "config" / "mcp_config.json"):
-    data = {{"mcpServers": {{}}}}
-    if cfg.exists():
-        try:
-            data = json.loads(cfg.read_text(encoding="utf-8"))
-        except Exception:
-            data = {{"mcpServers": {{}}}}
-    data.setdefault("mcpServers", {{}})["trellis-mcp"] = entry
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
-
-print(f"Installed remote trellis-mcp -> {{base}}/mcp ({{len(bundle.get('skills', {{}}))}} skills)")
+print(f"Installed remote trellis-mcp -> {{base}}/mcp ({{len(skills)}} skills, mode 0600)")
 PYEOF
 """
