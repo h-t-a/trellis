@@ -1,6 +1,6 @@
-# `ai-dev-playbook` (Trellis) — Enterprise Multi-AI Engineering Standard & MCP Control Plane
+# Trellis (`trellis-mcp`) — Open-Source Multi-AI Engineering Standard & MCP Control Plane
 
-**Version:** `v0.1.0` (`SPEC-001` Enterprise Multi-AI & Security Upgrade)  
+**Version:** `v0.1.0` (`SPEC-001` + `SPEC-002` Public OSS Hardening)  
 **Primary Tools Supported:** **Antigravity IDE**, **Claude Code**, **VS Code**, **JetBrains**, **Cursor**, and **Windsurf** (via `--emit-config`)  
 **Canonical Source of Truth:** [`docs/standards/`](./docs/standards/) & [`docs/specs/001-secure-multi-ai-trellis.md`](./docs/specs/001-secure-multi-ai-trellis.md)  
 **Zero-Dependency MCP Server & Installer:** [`trellis_mcp/`](./trellis_mcp/) (`python -m trellis_mcp`, optional `[knowledge]` extra for `numpy`)
@@ -9,7 +9,7 @@
 
 ## 1. Purpose
 
-`ai-dev-playbook` (**Trellis**) is a version-controlled engineering playbook, cross-IDE skill bundle (18 unified `/pb-*` skills), and zero-dependency **Model Context Protocol (MCP)** control plane (`trellis-mcp`) for agentic and multi-AI software engineering:
+**Trellis** (`trellis-mcp`) is a version-controlled engineering playbook, cross-IDE skill bundle (18 unified `/pb-*` skills), and zero-dependency **Model Context Protocol (MCP)** control plane for agentic and multi-AI software engineering:
 
 1. **Consistency:** Every project—and every **Software Engineer**—follows the same quality bar when building with **AI agents, foundation models, RAG pipelines, subagents, and MCP tools**.
 2. **Skill Growth:** Working with AI agents makes engineers and architects stronger (critical review of architectural/implementation plans, failing tests first, turning mistakes into explicit rules), not weaker.
@@ -194,37 +194,40 @@ See the full [Deployment & Release Progress Guide (`docs/deployment-guide.md`)](
    # Localhost development (default --host 127.0.0.1)
    python -m trellis_mcp --serve-http --auto-generate-key --port 8080
 
-   # Shared VM / LAN (pass --host 0.0.0.0 explicitly + TLS in production)
+   # Shared Host / Production (TLS required for non-loopback unless --insecure-http)
    python -m trellis_mcp --serve-http --auto-generate-key --host 0.0.0.0 --port 8443 \
      --tls-cert /path/server.crt --tls-key /path/server.key \
-     --allowed-origin https://dashboard.internal
+     --public-url https://trellis.example.com \
+     --bundle-signing-key "$TRELLIS_BUNDLE_SIGNING_KEY" \
+     --allowed-origin https://trellis.example.com
    ```
-   - **With TLS & HMAC Bundle Signing (Production):** Pass `--tls-cert`, `--tls-key`, `--bundle-signing-key`, `--allowed-origin`, and `--audit-log` (or set `TRELLIS_TLS_CERT`, `TRELLIS_TLS_KEY`, `TRELLIS_BUNDLE_SIGNING_KEY`, `TRELLIS_ALLOWED_ORIGINS`, `TRELLIS_AUDIT_LOG`, `TRELLIS_SESSION_SECRET`, `TRELLIS_SESSION_TTL_SEC`, `TRELLIS_SECURE_COOKIES`). See [`.env.example`](./.env.example) for all supported variables.
+   - **With TLS & HMAC Bundle Signing (Production):** Pass `--tls-cert`, `--tls-key`, `--public-url`, `--bundle-signing-key`, `--allowed-origin`, `--trust-proxy`, and `--audit-log` (see [`.env.example`](./.env.example) for all supported variables).
 2. **Issue, Rotate, or Revoke API Keys:**
    ```bash
-   python -m trellis_mcp --generate-key team-ibanking --role member --expires-days 90 \
-     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_scan
+   python -m trellis_mcp --generate-key team-alpha --role member --expires-days 90 \
+     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_review
    python -m trellis_mcp --list-keys
-   python -m trellis_mcp --rotate-key team-ibanking --expires-days 90
-   python -m trellis_mcp --revoke-key team-ibanking
+   python -m trellis_mcp --rotate-key team-alpha --expires-days 90
+   python -m trellis_mcp --revoke-key team-alpha
    ```
    Or manage keys interactively in your browser at `http://127.0.0.1:8080/admin/dashboard` (generate, edit label/role, filter, or revoke).
-3. **Zero-Clone Client Onboarding:**
+3. **Zero-Clone Client Onboarding (Signed Bundles Over HTTPS):**
    ```bash
    # macOS / Linux / WSL / Git Bash
    export TRELLIS_API_KEY="<member-api-key>"
-   curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" http://<vm-ip>:8080/install.sh | sh
+   export TRELLIS_BUNDLE_SIGNING_KEY="<bundle-signing-key>"
+   curl -fsSL -H "Authorization: Bearer $TRELLIS_API_KEY" https://trellis.example.com/install.sh | sh
    ```
    ```powershell
    # Windows PowerShell
-   python -m trellis_mcp --install-remote http://<vm-ip>:8080 --api-key "<member-api-key>"
+   python -m trellis_mcp --install-remote https://trellis.example.com --api-key "<member-api-key>" --bundle-signing-key "<bundle-signing-key>"
    ```
 
 ---
 
 ## 6. Verification & Automated Tests
 
-Run the full requirement-linked test suite (`47` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..16]`, `[REQ-DOC-01..06]`):
+Run the full requirement-linked test suite (`56` tests covering `[REQ-MCP-01..10]`, `[REQ-P2-01..06]`, `[REQ-P3-01..07]`, `[REQ-TRL-01..25]`, `[REQ-DOC-01..06]`):
 ```bash
 python -m unittest discover -s tests -v
 python -m trellis_mcp --sync-workspace

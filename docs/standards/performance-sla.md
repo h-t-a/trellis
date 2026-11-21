@@ -1,20 +1,18 @@
 # Performance Testing & SLA Standard
 
 **Status:** Working draft v0.1 `[SOURCE: Developers, with corrections]` `[DRAFT]`  
-**Source:** [trellis-project-export.md](../knowledge/trellis-project-export.md) (Section 4.1)
+**Source:** Canonical Trellis engineering standard (`docs/standards/`)
 
 ---
 
-## 1. Open Question: Management Targets (`10,000` and `1,000+`) `[VERIFY]`
+## 1. Clarifying Throughput Units Before Sizing `[VERIFY]`
 
 > [!WARNING]
-> **Unconfirmed Requirement - Do Not Treat as Finalized SLA**
-> Meeting notes recorded Management targets of **10,000** for the **Wallet application** and **1,000+** for the **Web Portal**.
->
-> During the meeting, the spoken term `"TUS"` was **assumed** to mean **TPS** (transactions per second). **This is an unverified assumption.**
+> **Unconfirmed Requirement - Do Not Treat Ambiguous Stakeholder Numbers as Finalized SLA**
+> When stakeholders provide raw load numbers (for example, `10,000` for a high-volume API or `1,000+` for a web portal), never assume the unit without written confirmation.
 >
 > **Action Required Before Finalizing Architecture or Test Design:**
-> Confirm with Management whether `10,000` (Wallet) and `1,000+` (Web Portal) mean:
+> Confirm explicitly with stakeholders whether target numbers mean:
 > 1. **TPS** (completed business transactions per second),
 > 2. **Concurrent users** (simultaneous active sessions / VUs), or
 > 3. **Daily transaction volume** (total transactions per day).
@@ -61,9 +59,9 @@ $$\text{Concurrent VUs} \approx \text{TPS} \times (\text{Response Time} + \text{
 
 | Application / Flow | Target Throughput (`[VERIFY: TPS vs Users vs Daily Volume]`) | Sustained Hold Duration | Latency `p50` | Latency `p95` | Latency `p99` | Max Error Rate | Sign-Off Owner |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| *Example: Wallet Transfer Flow (EXAMPLE ONLY)* | *10,000 TPS (example)* | *30 min (example)* | *< 0.5 s (example)* | *< 2.0 s (example)* | *< 5.0 s (example)* | *< 0.1% (example)* | *[Named Owner]* |
-| **Wallet Application** | `TODO [VERIFY with Management]` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` |
-| **Web Portal** | `TODO [VERIFY with Management]` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` |
+| *Example: Checkout API Flow (EXAMPLE ONLY)* | *1,000 TPS (example)* | *30 min (example)* | *< 0.5 s (example)* | *< 2.0 s (example)* | *< 5.0 s (example)* | *< 0.1% (example)* | *[Named Owner]* |
+| **Primary API Service** | `TODO [VERIFY with Stakeholders]` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` |
+| **Web Portal** | `TODO [VERIFY with Stakeholders]` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` | `TODO` |
 
 ---
 

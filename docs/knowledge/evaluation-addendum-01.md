@@ -1,7 +1,7 @@
 # Independent Technical & Cost-Efficiency Evaluation: Research Addendum 01
 
 - **Reviewed Document:** [docs/knowledge/trellis-project-research-addendum-01_2026-10-16.md](./trellis-project-research-addendum-01_2026-10-16.md)
-- **Baseline Reference:** [docs/knowledge/trellis-project-export.md](./trellis-project-export.md)
+- **Baseline Reference:** Initial project design baseline (archived prior to public release)
 - **Evaluation Date:** 2026-10-16
 - **Evidence Labels Used:** `OFFICIAL-DOC` · `IN-IDE-TEST` · `CROSS-FILE` · `REASONED` · `UNVERIFIED`
 

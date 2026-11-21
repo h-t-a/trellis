@@ -1,7 +1,7 @@
 # Engineering Onboarding Guide: `ai-dev-playbook` (Trellis)
 
 **Status:** Working draft v0.1 `[DRAFT]`  
-**Source:** [trellis-project-export.md](./knowledge/trellis-project-export.md) (Sections 1, 2, 3, 7, 10, 11)
+**Source:** Canonical Trellis standards (`docs/standards/`)
 
 Welcome to the **Agentic & AI-Driven Engineering Standard** starter kit for **Software Engineers**. This guide explains how to adopt the playbook when developing with **AI agents, foundation models, RAG pipelines, subagents, and MCP tools** in **Claude Code** and **Antigravity IDE**, how to sharpen your engineering and architectural judgment, and how to contribute improvements back to the standard.
 
@@ -48,18 +48,18 @@ python3 -m trellis_mcp --sync-cache
 2. **As Administrator — Generate, Edit, Rotate, or Revoke Keys (CLI, HTTP API, or Browser Dashboard):**
    - **Browser Admin Dashboard:** Open `http://127.0.0.1:8080/admin/dashboard` (or `https://<vm-ip>:8443/admin/dashboard`) and sign in with your admin key (`15`-minute `HttpOnly`, `SameSite=Strict`, CSRF-protected session with light/dark theme toggle, KPI cards, search/filters, and key generation/edit/revocation modals).
    ```bash
-   # Via CLI on the VM (no restart required):
-   python3 -m trellis_mcp --generate-key team-ibanking --role member --expires-days 90 \
-     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_scan
+   # Via CLI on the server (no restart required):
+   python3 -m trellis_mcp --generate-key team-alpha --role member --expires-days 90 \
+     --scopes trellis_get_standard,trellis_search_knowledge,trellis_classify,trellis_review
    python3 -m trellis_mcp --list-keys
-   python3 -m trellis_mcp --rotate-key team-ibanking --expires-days 90
-   python3 -m trellis_mcp --revoke-key team-ibanking
+   python3 -m trellis_mcp --rotate-key team-alpha --expires-days 90
+   python3 -m trellis_mcp --revoke-key team-alpha
 
-   # Or remotely via HTTP POST /admin/keys:
-   curl -s -X POST http://<vm-ip>:8080/admin/keys \
+   # Or remotely via HTTPS POST /admin/keys:
+   curl -s -X POST https://trellis.example.com/admin/keys \
      -H "Authorization: Bearer <ADMIN_API_KEY>" \
      -H "Content-Type: application/json" \
-     -d '{"label": "team-ibanking", "role": "member", "expires_days": 90}'
+     -d '{"label": "team-alpha", "role": "member", "expires_days": 90}'
    ```
 3. **On any teammate's machine (Zero Git Clone required):**
    ```bash
